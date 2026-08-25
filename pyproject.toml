@@ -1,0 +1,19 @@
+[project]
+name = "monarch-bdc-kg"
+version = "0.1.0"
+description = "BDC knowledge graph: monarch-kg base plus BDC-specific layers, with coverage reporting"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "koza>=2.6.2",
+    "duckdb>=1.1",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.ruff]
+line-length = 120

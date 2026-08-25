@@ -1,0 +1,63 @@
+# BDC KG coverage rubric and goals.
+#
+# `rubric` maps each BDC node type to the biolink classes that count as it
+# (from "BDC KG Requirements & Gap Analysis", 2026-06-03). The coverage report
+# computes the FULL subject×object matrix over these types — unlike the
+# original curated-pairs report, which hid real coverage (e.g. 12.6k
+# Procedure→Phenotype edges).
+#
+# `goals` carries intent for specific directed pairs:
+#   target      — BDC wants this pair populated; zero (or below `floor`) is a gap
+#   not-target  — intentionally empty/thin (inverse direction carries the
+#                 assertion, or coverage is inferred another way); zero is OK
+# Pairs not listed are informational: reported, not judged.
+
+rubric:
+  Disease: [Disease]
+  Phenotype: [BehavioralFeature, ClinicalFinding, PhenotypicFeature]
+  Gene / Variant: [Gene, Genotype, SequenceVariant]
+  Drug:
+    [ChemicalEntity, ChemicalMixture, ComplexMolecularMixture, Drug,
+     EnvironmentalFoodContaminant, Food, FoodAdditive, MolecularEntity,
+     MolecularMixture, NucleicAcidEntity, ProcessedMaterial, SmallMolecule]
+  Body Part:
+    [AnatomicalEntity, Cell, CellularComponent, GrossAnatomicalStructure,
+     PathologicalAnatomicalStructure]
+  Measurement / Clinical Lab:
+    [ClinicalAttribute, ClinicalCourse, ClinicalMeasurement, ClinicalModifier,
+     Onset]
+  Procedure: [Procedure]
+  Imaging / Waveform: []   # no biolink home yet
+
+goals:
+  - {subject: Procedure, object: Disease, goal: target,
+     note: "filled by semmeddb-procedure + snomed-hasfocus layers"}
+  - {subject: Procedure, object: Phenotype, goal: target,
+     note: "filled by semmeddb-procedure + snomed-hasfocus layers"}
+  - {subject: Procedure, object: "Body Part", goal: target,
+     note: "candidate source: SNOMED procedure-site / NCIT anatomy relations"}
+  - {subject: "Measurement / Clinical Lab", object: Disease, goal: target,
+     note: "not in LOINC itself; needs guidelines/literature source"}
+  - {subject: "Imaging / Waveform", object: Disease, goal: target,
+     note: "blocked: no biolink home for imaging; RadLex license open question"}
+  - {subject: Drug, object: Disease, goal: target, floor: 1000,
+     note: "trough: ctd/medic removed in 2026-07-17 build, medic returns next release"}
+
+  - {subject: Disease, object: Procedure, goal: not-target,
+     note: "inverse of Procedure→Disease; directional asymmetry is intended"}
+  - {subject: Disease, object: "Measurement / Clinical Lab", goal: not-target,
+     note: "inverse of Measurement→Disease"}
+  - {subject: Disease, object: "Imaging / Waveform", goal: not-target,
+     note: "inverse of Imaging→Disease"}
+  - {subject: "Body Part", object: Disease, goal: not-target,
+     note: "Disease→Body Part carries the assertion (mondo disease_has_location)"}
+  - {subject: "Body Part", object: Procedure, goal: not-target,
+     note: "inverse of Procedure→Body Part"}
+  - {subject: Drug, object: "Body Part", goal: not-target,
+     note: "realistically inferred from Drug→Phenotype with located phenotypes"}
+  - {subject: Phenotype, object: "Measurement / Clinical Lab", goal: not-target,
+     note: "Measurement→Phenotype carries the assertion (loinc2hpo)"}
+  - {subject: Drug, object: "Measurement / Clinical Lab", goal: not-target,
+     note: "Measurement→Drug carries the assertion (omop2obo)"}
+  - {subject: "Body Part", object: "Measurement / Clinical Lab", goal: not-target,
+     note: "Measurement→Body Part carries the assertion (omop2obo)"}

@@ -1,0 +1,41 @@
+# BDC overlay sources, layered on top of the monarch-kg base.
+#
+# Each ingest publishes dated KGX releases to gs://monarch-bdc-kg/<name>/<YYYY-MM-DD>/
+# plus a latest/ mirror of the newest one (one top-level prefix per ingest repo;
+# a dated dir may carry multiple license tiers distinguished by filename).
+# `just download-sources` reads latest/, or the dated dir pinned by `release:` —
+# pin for reproducible builds.
+#
+# File paths are relative to the dated dir; the local mirror is
+# data/sources/<name>/. `provided_by` stems stamp provenance during conform —
+# koza append does not stamp it (yet; see koza#248, the `layer` verb proposal).
+
+sources:
+  - name: semmeddb
+    release: latest   # or YYYY-MM-DD to pin
+    description: >
+      Procedure→Disease/Phenotype (diagnoses / treats) edges mined from the
+      LLM-verified SemMedDB subset, MONDO/HP objects. Two license tiers in one
+      release: ncit (open) and snomedct (RESTRICTED — node labels are SNOMED CT
+      description text; private-bucket/internal use only; a public release of
+      the layered KG needs the ingest's OUTPUT_TIER=open rebuild). Built by
+      monarch-initiative/semmeddb-procedure-ingest.
+    node_files:
+      - procedure_to_disease_ncit_nodes.jsonl
+      - procedure_to_disease_snomedct_nodes.jsonl
+    edge_files:
+      - procedure_to_disease_ncit_edges.jsonl
+      - procedure_to_disease_snomedct_edges.jsonl
+
+  - name: snomed-hasfocus
+    release: latest
+    description: >
+      High-precision Procedure→Disease/Phenotype edges from SNOMED CT's
+      "Has focus" attribute, direction-typed via Method/Intent, mapped to
+      MONDO/HP via mondo.sssom + hpo-snomed.sssom. SNOMEDCT: codes only,
+      labels blank (SNOMED license). Currently converted from the exploratory
+      extraction; will migrate to its own ingest repo.
+    node_files:
+      - snomed_hasfocus_nodes.tsv
+    edge_files:
+      - snomed_hasfocus_edges.tsv

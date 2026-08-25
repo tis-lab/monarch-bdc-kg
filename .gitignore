@@ -1,0 +1,17 @@
+# build inputs and outputs live in the bucket, not git
+data/
+output/
+
+# python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# dashboard
+dashboard/node_modules/
+dashboard/dist/
+
+# local
+.DS_Store

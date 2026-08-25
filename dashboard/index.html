@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BDC KG Coverage</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>BDC KG Coverage</h1>
+      <p id="meta">loading…</p>
+    </header>
+    <section id="stats"></section>
+    <section>
+      <h2>Rubric matrix <span class="hint">edges by BDC node-type pair — click a cell for predicates &amp; sources</span></h2>
+      <div id="matrix"></div>
+    </section>
+    <section id="detail" hidden>
+      <h2 id="detail-title"></h2>
+      <p id="detail-note" class="note"></p>
+      <table id="detail-table"></table>
+    </section>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
