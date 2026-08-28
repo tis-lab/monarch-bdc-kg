@@ -1,0 +1,69 @@
+# Build the coverage dashboard and publish it to GitHub Pages.
+#
+# Site: https://tis-lab.github.io/monarch-bdc-kg/
+# `dashboard/vite.config.js` sets base: "/monarch-bdc-kg/" to match that path —
+# if the repo is ever renamed or moved to a user/org root, that base must change
+# or every asset 404s.
+#
+# The dashboard reads dashboard/public/coverage.json, which is COMMITTED. This
+# workflow does not rebuild the KG (that needs the private bucket and a ~6 GB
+# duckdb); it publishes whatever coverage.json is in the repo. Refresh it with
+# `just coverage` locally and commit the result.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dashboard/**"
+      - ".github/workflows/pages.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it midway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Build
+        working-directory: dashboard
+        run: npm run build
+
+      - name: Fail if coverage.json did not make it into the build
+        run: |
+          test -f dashboard/dist/coverage.json \
+            || { echo "::error::dashboard/dist/coverage.json missing — the dashboard would render empty"; exit 1; }
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
