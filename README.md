@@ -5,6 +5,8 @@ as the base layer, with BDC-specific content appended on top, plus a coverage
 dashboard tracking how well the graph meets the
 [BDC KG Requirements & Gap Analysis](coverage-goals.yaml) rubric.
 
+**[View the coverage dashboard →](https://tis-lab.github.io/monarch-bdc-kg/)**
+
 Inputs are read from Google Cloud Storage and the built KG is published back
 to `gs://monarch-bdc-kg/` — there is no GitHub release.
 
@@ -50,10 +52,13 @@ Requires `gcloud` auth with access to the Monarch GCS buckets.
 
 ## Coverage dashboard
 
+Published at **<https://tis-lab.github.io/monarch-bdc-kg/>**.
+
 `just coverage` writes `output/coverage.json` (full rubric matrix, judged
 against the goals in `coverage-goals.yaml`) and copies it into
 `dashboard/public/`. The dashboard is a small static Vite app deployed to
-GitHub Pages on push to `main`.
+GitHub Pages on push to `main` by
+[`.github/workflows/pages.yaml`](.github/workflows/pages.yaml).
 
 ```bash
 just dashboard-dev
