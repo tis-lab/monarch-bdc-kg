@@ -50,6 +50,24 @@ just upload     # publish to gs://monarch-bdc-kg/kg/{date}/ + latest/
 
 Requires `gcloud` auth with access to the Monarch GCS buckets.
 
+## Search API
+
+[`search/`](search/) is `bdc-search`, a Rust service that answers Monarch's v3
+`/autocomplete` from a [tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's
+nodes. Because responses match Monarch's, the BDC data portal middleware can point its
+`MONARCH_BASE_URL` at it.
+
+```bash
+just search-index   # sql/search_entity.sql → data/search/entities.jsonl → data/search/index
+just search-serve   # http://localhost:8080/v3/api/autocomplete?q=pulmonary%20hyper
+just search-image   # linux/amd64 image; run with the index mounted at /index
+```
+
+The query mirrors monarch-app's autocomplete: Monarch's query fields and boosts, every
+word required, and Monarch's category, deprecation and exact-synonym multipliers. Analyzers
+follow monarch-ingest's Solr field types. Labels from restricted sources (the SemMedDB
+snomedct tier) are blanked in `sql/search_entity.sql`, so the index never carries them.
+
 ## Coverage dashboard
 
 Published at **<https://tis-lab.github.io/monarch-bdc-kg/>**.

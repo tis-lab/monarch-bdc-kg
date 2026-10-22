@@ -85,6 +85,32 @@ upload:
 
 all: download conform layer verify coverage
 
+# ── search API ────────────────────────────────────────────────────────────
+#
+# bdc-search (search/): a Monarch v3 compatible search API over {{db}}.
+
+search_dir := "data/search"
+
+# Export one search document per node (sql/search_entity.sql) and build the index
+search-index:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{search_dir}}
+    uv run python -c 'import duckdb, sys; duckdb.connect(sys.argv[1], read_only=True).execute(f"COPY ({open(sys.argv[2]).read()}) TO \x27{sys.argv[3]}\x27 (FORMAT json)")' \
+        {{db}} sql/search_entity.sql {{search_dir}}/entities.jsonl
+    rm -rf {{search_dir}}/index
+    cargo run --release --manifest-path search/Cargo.toml -- index \
+        --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index
+
+# Serve the index on localhost:8080 (/v3/api/autocomplete, /health/ready)
+search-serve:
+    cargo run --release --manifest-path search/Cargo.toml -- serve \
+        --index-dir {{search_dir}}/index --bind 127.0.0.1:8080
+
+# Container image for Cloud Apps; run it with the index mounted at /index
+search-image:
+    docker build --platform linux/amd64 -t bdc-search:dev search
+
 # ── dashboard ─────────────────────────────────────────────────────────────
 
 dashboard-dev:
