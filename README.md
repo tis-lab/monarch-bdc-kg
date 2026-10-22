@@ -50,6 +50,25 @@ just upload     # publish to gs://monarch-bdc-kg/kg/{date}/ + latest/
 
 Requires `gcloud` auth with access to the Monarch GCS buckets.
 
+## Variable library (exploratory)
+
+`just varlib` loads the BDC variable library into a `varlib` schema in the same
+duckdb, beside the KG tables rather than in `nodes`/`edges`. Inputs are pinned by
+commit in [`varlib.yaml`](varlib.yaml):
+
+| input | from | gives |
+|---|---|---|
+| variable library | `dm-bip extract-variable-library` ([linkml/dm-bip#376](https://github.com/linkml/dm-bip/pull/376)) | per-phv `SingleContinuousVariable` / `SingleCategoricalVariable` entries of [bdc-variable-library](https://github.com/linkml/bdc-variable-library) |
+| mapping provenance | `dm-bip extract-mapping-provenance` | which phvs each HV trans-spec reads |
+| concepts | [tis-lab/BDC-VarLib](https://github.com/tis-lab/BDC-VarLib) schema modules | harmonized concepts, their categories and ontology anchors |
+
+Tables are in [`sql/varlib_schema.sql`](sql/varlib_schema.sql), and views joining
+them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_views.sql):
+
+- `varlib.variable_concept`: phv → concept, through mapping provenance when BDC-VarLib doesn't list the phvs itself
+- `varlib.concept_doc` and `varlib.variable_doc`: one search document per concept and per variable, with KG anchor labels and closure ancestors
+- `varlib.lexicon` and `varlib.lexicon_word`: every surface string and word with a weight, the input to a words-mode autocomplete
+
 ## Coverage dashboard
 
 Published at **<https://tis-lab.github.io/monarch-bdc-kg/>**.
