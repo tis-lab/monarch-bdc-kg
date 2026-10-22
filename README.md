@@ -52,10 +52,16 @@ Requires `gcloud` auth with access to the Monarch GCS buckets.
 
 ## Search API
 
-[`search/`](search/) is `bdc-search`, a Rust service that answers Monarch's v3
-`/autocomplete` from a [tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's
-nodes. Because responses match Monarch's, the BDC data portal middleware can point its
-`MONARCH_BASE_URL` at it.
+[`search/`](search/) is `bdc-search`, a Rust service that answers Monarch v3 routes from a
+[tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's nodes. Because responses
+match Monarch's, the BDC data portal middleware can point its `MONARCH_BASE_URL` at it.
+
+| route | parameters |
+|---|---|
+| `GET /v3/api/autocomplete` | `q` (top 10) |
+| `GET /v3/api/search` | `q` (default `*:*`), `category` (repeatable), `limit` (0-500, default 20), `offset` |
+| `GET /v3/api/entity/{id}` | node fields only; no associations or hierarchy yet |
+| `GET /health/live`, `/health/ready` | probes |
 
 ```bash
 just search-index   # sql/search_entity.sql → data/search/entities.jsonl → data/search/index

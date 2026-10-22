@@ -13,7 +13,7 @@ use tantivy::query::{
     TermQuery,
 };
 use tantivy::schema::{Field, IndexRecordOption, Value};
-use tantivy::{doc, DocId, Index, IndexReader, ReloadPolicy, Score, Term};
+use tantivy::{doc, DocAddress, DocId, Index, IndexReader, ReloadPolicy, Score, Searcher, Term};
 use tantivy::{SegmentReader, TantivyDocument};
 
 use crate::analysis::{self, AUTOCOMPLETE_QUERY, TEXT};
@@ -232,14 +232,7 @@ impl Engine {
         let mut items = Vec::with_capacity(hits.len());
         if limit > 0 {
             for (score, addr) in hits {
-                let stored: TantivyDocument = searcher.doc(addr)?;
-                let json = stored
-                    .get_first(self.fields.doc)
-                    .and_then(|v| v.as_str())
-                    .context("stored doc missing")?;
-                let mut entity: Entity = serde_json::from_str(json)?;
-                // Monarch requires a name; restricted and unlabelled nodes fall back to the id.
-                entity.name.get_or_insert_with(|| entity.id.clone());
+                let entity = self.load(&searcher, addr)?;
                 items.push(SearchResult { entity, score });
             }
         }
@@ -249,6 +242,34 @@ impl Engine {
             total,
             items,
         })
+    }
+
+    /// Monarch's `/entity/{id}`, from the stored document.
+    pub fn entity(&self, id: &str) -> Result<Option<Entity>> {
+        let searcher = self.reader.searcher();
+        let term = Term::from_field_text(self.fields.id, id);
+        let query = TermQuery::new(term, IndexRecordOption::Basic);
+        match searcher
+            .search(&query, &TopDocs::with_limit(1).order_by_score())?
+            .first()
+        {
+            Some((_, addr)) => Ok(Some(self.load(&searcher, *addr)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn load(&self, searcher: &Searcher, addr: DocAddress) -> Result<Entity> {
+        let stored: TantivyDocument = searcher.doc(addr)?;
+        let json = stored
+            .get_first(self.fields.doc)
+            .and_then(|v| v.as_str())
+            .context("stored doc missing")?;
+        let mut entity: Entity = serde_json::from_str(json)?;
+        // Monarch requires a name; restricted and unlabelled nodes fall back to the id.
+        if entity.name.as_deref().is_none_or(|n| n.trim().is_empty()) {
+            entity.name = Some(entity.id.clone());
+        }
+        Ok(entity)
     }
 
     /// Monarch's edismax query: every whitespace-separated token must match (q.op=AND, mm=100%),

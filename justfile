@@ -102,7 +102,7 @@ search-index:
     cargo run --release --manifest-path search/Cargo.toml -- index \
         --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index
 
-# Serve the index on localhost:8080 (/v3/api/autocomplete, /health/ready)
+# Serve the index on localhost:8080 (/v3/api/autocomplete, /search, /entity/{id})
 search-serve:
     cargo run --release --manifest-path search/Cargo.toml -- serve \
         --index-dir {{search_dir}}/index --bind 127.0.0.1:8080

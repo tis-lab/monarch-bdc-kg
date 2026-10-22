@@ -16,13 +16,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::{Query, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
 
 use engine::Engine;
 
@@ -113,27 +112,127 @@ async fn main() -> Result<()> {
 fn router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route("/v3/api/autocomplete", get(autocomplete))
+        .route("/v3/api/search", get(search))
+        .route("/v3/api/entity/{id}", get(entity))
         // The index is opened before the listener binds, so serving at all means ready.
         .route("/health/live", get(|| async { "ok" }))
         .route("/health/ready", get(|| async { "ok" }))
         .with_state(engine)
 }
 
-#[derive(Deserialize)]
-struct AutocompleteParams {
-    q: String,
+/// Monarch's page size bounds for `/search`.
+const MAX_LIMIT: usize = 500;
+const DEFAULT_LIMIT: usize = 20;
+
+/// Query parameters, parsed by hand so repeated keys (`category=a&category=b`) work as they
+/// do in Monarch's FastAPI routes.
+struct Params(Vec<(String, String)>);
+
+impl Params {
+    fn parse(raw: Option<String>) -> Params {
+        let raw = raw.unwrap_or_default();
+        Params(
+            form_urlencoded::parse(raw.as_bytes())
+                .into_owned()
+                .collect(),
+        )
+    }
+
+    fn one(&self, key: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    fn all(&self, key: &str) -> Vec<String> {
+        self.0
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    fn count(&self, key: &str, default: usize, max: Option<usize>) -> Result<usize, Box<Response>> {
+        let Some(raw) = self.one(key) else {
+            return Ok(default);
+        };
+        match raw.parse::<usize>() {
+            Ok(n) if max.is_none_or(|max| n <= max) => Ok(n),
+            _ => Err(Box::new(unprocessable(key, raw, max))),
+        }
+    }
 }
 
-async fn autocomplete(
-    State(engine): State<Arc<Engine>>,
-    Query(params): Query<AutocompleteParams>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || engine.autocomplete(&params.q, &[])).await;
-    match result {
-        Ok(Ok(results)) => Json(results).into_response(),
+async fn autocomplete(State(engine): State<Arc<Engine>>, RawQuery(raw): RawQuery) -> Response {
+    let params = Params::parse(raw);
+    let Some(q) = params.one("q").map(str::to_owned) else {
+        return unprocessable("q", "", None);
+    };
+    blocking(move || {
+        engine
+            .autocomplete(&q, &[])
+            .map(|r| Json(r).into_response())
+    })
+    .await
+}
+
+async fn search(State(engine): State<Arc<Engine>>, RawQuery(raw): RawQuery) -> Response {
+    let params = Params::parse(raw);
+    let q = params.one("q").unwrap_or("*:*").to_owned();
+    let categories = params.all("category");
+    let limit = match params.count("limit", DEFAULT_LIMIT, Some(MAX_LIMIT)) {
+        Ok(n) => n,
+        Err(response) => return *response,
+    };
+    let offset = match params.count("offset", 0, None) {
+        Ok(n) => n,
+        Err(response) => return *response,
+    };
+    blocking(move || {
+        engine
+            .search(&q, &categories, limit, offset)
+            .map(|r| Json(r).into_response())
+    })
+    .await
+}
+
+async fn entity(State(engine): State<Arc<Engine>>, Path(id): Path<String>) -> Response {
+    blocking(move || {
+        Ok(match engine.entity(&id)? {
+            Some(entity) => Json(entity).into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "detail": "Entity not found" })),
+            )
+                .into_response(),
+        })
+    })
+    .await
+}
+
+/// Run a search off the async runtime: tantivy queries are synchronous and CPU-bound.
+async fn blocking(f: impl FnOnce() -> Result<Response> + Send + 'static) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(response)) => response,
         Ok(Err(e)) => internal_error(e),
         Err(e) => internal_error(e.into()),
     }
+}
+
+/// FastAPI's 422 shape for an invalid query parameter, which is what Monarch returns.
+fn unprocessable(key: &str, input: &str, max: Option<usize>) -> Response {
+    let msg = match (input.is_empty(), max) {
+        (true, _) => "Field required".to_string(),
+        (false, Some(max)) => format!("Input should be an integer from 0 to {max}"),
+        (false, None) => "Input should be a non-negative integer".to_string(),
+    };
+    let detail = serde_json::json!([{ "loc": ["query", key], "msg": msg, "input": input }]);
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(serde_json::json!({ "detail": detail })),
+    )
+        .into_response()
 }
 
 fn internal_error(e: anyhow::Error) -> Response {
