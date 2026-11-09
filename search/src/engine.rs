@@ -116,6 +116,9 @@ pub struct SearchResult {
     #[serde(flatten)]
     pub entity: Entity,
     pub score: f64,
+    /// What BDC has harmonized for this exact term, when anything; Monarch has no such field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bdc: Option<crate::concepts::Coverage>,
 }
 
 /// Monarch's SearchResults envelope.
@@ -233,7 +236,11 @@ impl Engine {
         if limit > 0 {
             for (score, addr) in hits {
                 let entity = self.load(&searcher, addr)?;
-                items.push(SearchResult { entity, score });
+                items.push(SearchResult {
+                    entity,
+                    score,
+                    bdc: None,
+                });
             }
         }
         Ok(SearchResults {

@@ -75,11 +75,20 @@ them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_view
 [tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's nodes. Because responses
 match Monarch's, the BDC data portal middleware can point its `MONARCH_BASE_URL` at it.
 
+When the duckdb has the `varlib` schema, `just search-index` also writes the harmonized
+concepts (`sql/search_concept.sql`: one per concept code, labelled from the KG) beside the
+index. The `/bdc` routes serve them in the middleware's own index format, so its
+`HARMONIZED_INDEX` can point at `/bdc/harmonized-index.json` instead of its bundled file, and
+`/search` and `/autocomplete` hits carry the same `bdc` coverage the middleware computes.
+
 | route | parameters |
 |---|---|
 | `GET /v3/api/autocomplete` | `q` (top 10) |
 | `GET /v3/api/search` | `q` (default `*:*`), `category` (repeatable), `limit` (0-500, default 20), `offset` |
 | `GET /v3/api/entity/{id}` | node fields only; no associations or hierarchy yet |
+| `GET /bdc/harmonized-index.json` | the harmonized concepts in bdc-dp-middleware's index format (schemaVersion 2) |
+| `GET /bdc/concepts` | `q` (text, or a CURIE for an exact lookup), `limit` (default 25) |
+| `GET /bdc/concepts/{curie}` | one harmonized concept |
 | `GET /health/live`, `/health/ready` | probes |
 
 ```bash

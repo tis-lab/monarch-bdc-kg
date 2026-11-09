@@ -3,8 +3,12 @@
 //!   bdc-search index --input entities.jsonl --index-dir index/
 //!   bdc-search serve --index-dir index/
 //!   bdc-search query --index-dir index/ hypertension
+//!
+//! Harmonized concepts (`concepts.jsonl`, from sql/search_concept.sql) are served from the
+//! same index directory when present.
 
 mod analysis;
+mod concepts;
 mod engine;
 mod readonly;
 mod schema;
@@ -23,7 +27,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use clap::{Parser, Subcommand};
 
-use engine::Engine;
+use concepts::{ConceptView, Concepts, DEFAULT_MAX_MATCHES};
+use engine::{Engine, SearchResults};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -97,9 +102,17 @@ async fn main() -> Result<()> {
         Command::Serve { index_dir, bind } => {
             let engine = Arc::new(Engine::open(&index_dir)?);
             tracing::info!(docs = engine.num_docs(), index = %index_dir.display(), "index opened");
+            let concepts = Concepts::open(&index_dir)?.map(Arc::new);
+            match &concepts {
+                Some(c) => tracing::info!(concepts = c.len(), "harmonized concepts loaded"),
+                None => tracing::warn!(
+                    "no {} in the index directory; /bdc routes return 404",
+                    concepts::CONCEPTS_FILE
+                ),
+            }
             let listener = tokio::net::TcpListener::bind(bind).await?;
             tracing::info!(%bind, "listening");
-            axum::serve(listener, router(engine))
+            axum::serve(listener, router(App { engine, concepts }))
                 .with_graceful_shutdown(async {
                     let _ = tokio::signal::ctrl_c().await;
                 })
@@ -109,15 +122,36 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn router(engine: Arc<Engine>) -> Router {
+#[derive(Clone)]
+struct App {
+    engine: Arc<Engine>,
+    concepts: Option<Arc<Concepts>>,
+}
+
+impl App {
+    /// Attach BDC coverage to each hit whose id is a harmonized concept.
+    fn with_coverage(&self, mut results: SearchResults) -> SearchResults {
+        if let Some(concepts) = &self.concepts {
+            for item in &mut results.items {
+                item.bdc = concepts.coverage(&item.entity.id);
+            }
+        }
+        results
+    }
+}
+
+fn router(app: App) -> Router {
     Router::new()
         .route("/v3/api/autocomplete", get(autocomplete))
         .route("/v3/api/search", get(search))
         .route("/v3/api/entity/{id}", get(entity))
+        .route("/bdc/harmonized-index.json", get(harmonized_index))
+        .route("/bdc/concepts", get(search_concepts))
+        .route("/bdc/concepts/{curie}", get(concept))
         // The index is opened before the listener binds, so serving at all means ready.
         .route("/health/live", get(|| async { "ok" }))
         .route("/health/ready", get(|| async { "ok" }))
-        .with_state(engine)
+        .with_state(app)
 }
 
 /// Monarch's page size bounds for `/search`.
@@ -164,20 +198,20 @@ impl Params {
     }
 }
 
-async fn autocomplete(State(engine): State<Arc<Engine>>, RawQuery(raw): RawQuery) -> Response {
+async fn autocomplete(State(app): State<App>, RawQuery(raw): RawQuery) -> Response {
     let params = Params::parse(raw);
     let Some(q) = params.one("q").map(str::to_owned) else {
         return unprocessable("q", "", None);
     };
     blocking(move || {
-        engine
+        app.engine
             .autocomplete(&q, &[])
-            .map(|r| Json(r).into_response())
+            .map(|r| Json(app.with_coverage(r)).into_response())
     })
     .await
 }
 
-async fn search(State(engine): State<Arc<Engine>>, RawQuery(raw): RawQuery) -> Response {
+async fn search(State(app): State<App>, RawQuery(raw): RawQuery) -> Response {
     let params = Params::parse(raw);
     let q = params.one("q").unwrap_or("*:*").to_owned();
     let categories = params.all("category");
@@ -190,16 +224,16 @@ async fn search(State(engine): State<Arc<Engine>>, RawQuery(raw): RawQuery) -> R
         Err(response) => return *response,
     };
     blocking(move || {
-        engine
+        app.engine
             .search(&q, &categories, limit, offset)
-            .map(|r| Json(r).into_response())
+            .map(|r| Json(app.with_coverage(r)).into_response())
     })
     .await
 }
 
-async fn entity(State(engine): State<Arc<Engine>>, Path(id): Path<String>) -> Response {
+async fn entity(State(app): State<App>, Path(id): Path<String>) -> Response {
     blocking(move || {
-        Ok(match engine.entity(&id)? {
+        Ok(match app.engine.entity(&id)? {
             Some(entity) => Json(entity).into_response(),
             None => (
                 StatusCode::NOT_FOUND,
@@ -209,6 +243,52 @@ async fn entity(State(engine): State<Arc<Engine>>, Path(id): Path<String>) -> Re
         })
     })
     .await
+}
+
+fn not_found(what: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "detail": format!("{what} not found") })),
+    )
+        .into_response()
+}
+
+/// The concept set in the middleware's harmonized-index format, so it can load this URL in
+/// place of its bundled file (HARMONIZED_INDEX=http://.../bdc/harmonized-index.json).
+async fn harmonized_index(State(app): State<App>) -> Response {
+    match &app.concepts {
+        Some(c) => Json(c.index_document()).into_response(),
+        None => not_found("Harmonized index"),
+    }
+}
+
+/// Harmonized concepts matching `q`, by the middleware's rules, most studies first.
+async fn search_concepts(State(app): State<App>, RawQuery(raw): RawQuery) -> Response {
+    let params = Params::parse(raw);
+    let Some(q) = params.one("q").map(str::to_owned) else {
+        return unprocessable("q", "", None);
+    };
+    let limit = match params.count("limit", DEFAULT_MAX_MATCHES, Some(MAX_LIMIT)) {
+        Ok(n) => n,
+        Err(response) => return *response,
+    };
+    let Some(concepts) = &app.concepts else {
+        return not_found("Harmonized index");
+    };
+    let items: Vec<ConceptView> = concepts
+        .search(&q, limit)
+        .into_iter()
+        .map(ConceptView::from)
+        .collect();
+    Json(serde_json::json!({ "total": items.len(), "limit": limit, "items": items }))
+        .into_response()
+}
+
+async fn concept(State(app): State<App>, Path(curie): Path<String>) -> Response {
+    match app.concepts.as_ref().and_then(|c| c.get(&curie)) {
+        Some(c) => Json(ConceptView::from(c)).into_response(),
+        None => not_found("Concept"),
+    }
 }
 
 /// Run a search off the async runtime: tantivy queries are synchronous and CPU-bound.
