@@ -109,7 +109,7 @@ varlib-sources:
 
 # Run dm-bip over the HV specs: mapping provenance for every cohort, and the
 # variable library for each cohort in varlib.yaml (fetches dbGaP dictionaries once,
-# then reads data/varlib/dbgap-cache)
+# then reads data/varlib/dbgap-cache); then build BDC-VarLib's concepts from the same specs
 varlib-extract:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -123,13 +123,22 @@ varlib-extract:
         uv run dm-bip extract-variable-library "$specs/$spec_dir" --cohort "$key" \
             --dbgap-cache {{varlib_dir}}/dbgap-cache -o "$out/$key-variable-library.yaml"
     done
+    # Concepts: BDC-VarLib's own build, run against the pinned HV checkout so concepts and
+    # variables come from one commit, and named with the KG's labels rather than spec file names
+    cd {{justfile_directory()}}
+    uv run python -c 'import duckdb, sys; duckdb.connect(sys.argv[1], read_only=True).execute(f"COPY (SELECT id, name FROM nodes WHERE trim(coalesce(name, \x27\x27)) <> \x27\x27 AND coalesce(provided_by, \x27\x27) NOT IN (\x27procedure_to_disease_snomedct_nodes\x27)) TO \x27{sys.argv[2]}\x27 (DELIMITER \x27\t\x27, HEADER false)")' \
+        {{db}} "$out/kg-labels.tsv"
+    rm -rf "$out/bdc-varlib"
+    cd {{varlib_dir}}/src/BDC-VarLib && uv sync -q && uv run python scripts/build_bdc_varlib.py \
+        --repo-dir {{varlib_dir}}/src/NHLBI-BDC-DMC-HV --labels "$out/kg-labels.tsv" --outdir "$out/bdc-varlib"
 
-# Load whatever varlib-extract produced, plus BDC-VarLib concepts, into {{db}}
+# Load whatever varlib-extract produced (variables, provenance, concepts) into {{db}}
 varlib-load:
     uv run scripts/load_varlib.py {{db}} \
         --mapping-provenance {{varlib_dir}}/out/mapping-provenance.yaml \
         --variable-library {{varlib_dir}}/out/*-variable-library.yaml \
-        --concepts-dir {{varlib_dir}}/src/BDC-VarLib/src/bdc_varlib/schema \
+        --concepts-dir {{varlib_dir}}/out/bdc-varlib \
+        --source-repos {{varlib_dir}}/src/* \
         --sssom $(uv run python -c 'import yaml; print(" ".join("{{varlib_dir}}/src/" + p for p in yaml.safe_load(open("varlib.yaml"))["sssom"]))')
 
 varlib: varlib-sources varlib-extract varlib-load

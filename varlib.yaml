@@ -15,11 +15,11 @@ repos:
   NHLBI-BDC-DMC-HV:
     url: https://github.com/RTIInternational/NHLBI-BDC-DMC-HV.git
     ref: main
-    commit: 430810cd15e8b86f7ca8310093abc141c8fead83
+    commit: 3260ff30824b78ea895a34b526e3ef1e8ee74035
   BDC-VarLib:
     url: https://github.com/tis-lab/BDC-VarLib.git
     ref: main
-    commit: 623d39200936b94639876de4b92b3da5dc9b4dae
+    commit: 0da1cf13e0d8095925e3e84825e296f52e636c80
 
   monarch-mapping-commons:
     url: https://github.com/monarch-initiative/monarch-mapping-commons.git

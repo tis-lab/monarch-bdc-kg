@@ -5,7 +5,7 @@
 --                      SingleContinuousVariable / SingleCategoricalVariable entries of
 --                      linkml/bdc-variable-library
 --   mapping provenance dm-bip `extract-mapping-provenance`: which phvs each HV trans-spec reads
---   concepts           tis-lab/BDC-VarLib schema modules: one slot per harmonized concept
+--   concepts           tis-lab/BDC-VarLib's build over the same specs: one slot per concept code
 --
 -- Nothing here lives in nodes/edges, so the KGX export, verify and coverage are unaffected.
 -- Participant-level data (dm-bip mapped-data/) never enters these tables.
@@ -77,6 +77,7 @@ CREATE OR REPLACE TABLE varlib.derivation (
     id         VARCHAR PRIMARY KEY,  -- dmcprov:ARIC-ingest/bmi/MeasurementObservation/pht004063
     spec_id    VARCHAR,              -- commit permalink or dmcprov: id
     spec_path  VARCHAR,              -- ARIC-ingest/bmi.yaml (joins concept_source.source_file)
+    bdchm_class VARCHAR,             -- the class the fragment derives: MeasurementObservation, Condition, ...
     study_id   VARCHAR,
     pht        VARCHAR,
     name       VARCHAR
@@ -88,17 +89,19 @@ CREATE OR REPLACE TABLE varlib.derivation_source (
     via_expression  BOOLEAN           -- read only inside an expr, e.g. a participant join key
 );
 
--- Harmonized concepts. BDC-VarLib models each as a slot whose annotations fold the
--- contributing studies, datasets and specs into comma-delimited lists; they are exploded here.
+-- Harmonized concepts: one per concept code a BDCHM class uses in the HV specs, from
+-- BDC-VarLib's build. Its slots fold the contributing studies, datasets and specs into
+-- comma-delimited annotations; they are exploded here.
 
 CREATE OR REPLACE TABLE varlib.concept (
-    id            VARCHAR PRIMARY KEY,  -- bdcvl:albumin_bld
+    id            VARCHAR PRIMARY KEY,  -- bdcvl:mondo_0005044 (BDC-VarLib's slot name)
+    code          VARCHAR,              -- the concept code from the specs, e.g. MONDO:0005044
     slot_name     VARCHAR NOT NULL,
-    category      VARCHAR,              -- module title, e.g. Lab Measurement
-    module        VARCHAR,              -- bdc_varlib_lab_measurement
-    bdchm_class   VARCHAR,              -- MeasurementObservation, Condition, ...
-    title         VARCHAR,
-    description   VARCHAR,
+    category      VARCHAR,              -- BDCHM class, from the module: Condition, MeasurementObservation, ...
+    module        VARCHAR,              -- bdc_varlib_condition
+    bdchm_class   VARCHAR,
+    title         VARCHAR,              -- the code's KG label, else the spec file names
+    description   VARCHAR,              -- provenance and method strings from the specs
     range         VARCHAR               -- enum name for coded concepts
 );
 

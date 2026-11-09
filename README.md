@@ -60,12 +60,12 @@ commit in [`varlib.yaml`](varlib.yaml):
 |---|---|---|
 | variable library | `dm-bip extract-variable-library` ([linkml/dm-bip#376](https://github.com/linkml/dm-bip/pull/376)) | per-phv `SingleContinuousVariable` / `SingleCategoricalVariable` entries of [bdc-variable-library](https://github.com/linkml/bdc-variable-library) |
 | mapping provenance | `dm-bip extract-mapping-provenance` | which phvs each HV trans-spec reads |
-| concepts | [tis-lab/BDC-VarLib](https://github.com/tis-lab/BDC-VarLib) schema modules | harmonized concepts, their categories and ontology anchors |
+| concepts | [tis-lab/BDC-VarLib](https://github.com/tis-lab/BDC-VarLib)'s `scripts/build_bdc_varlib.py`, run over the same pinned specs | one concept per code a BDCHM class uses (e.g. MONDO:0005044), named with the KG's label |
 
 Tables are in [`sql/varlib_schema.sql`](sql/varlib_schema.sql), and views joining
 them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_views.sql):
 
-- `varlib.variable_concept`: phv → concept, through mapping provenance when BDC-VarLib doesn't list the phvs itself
+- `varlib.variable_concept`: phv → concept, as BDC-VarLib lists them or through mapping provenance (same spec file, BDCHM class and dataset)
 - `varlib.concept_doc` and `varlib.variable_doc`: one search document per concept and per variable, with KG anchor labels and closure ancestors
 - `varlib.lexicon` and `varlib.lexicon_word`: every surface string and word with a weight, the input to a words-mode autocomplete
 

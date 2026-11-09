@@ -1,15 +1,21 @@
 -- Views that integrate the varlib tables with each other and with the KG.
 -- Recreated by scripts/load_varlib.py after every load.
 
--- Which concept each source variable feeds. BDC-VarLib lists phvs directly for only some
--- concepts; the rest are resolved through mapping provenance, since a concept's source_file
--- is the trans-spec whose derivations read those phvs. Join keys (participant ids read only
--- inside an expr) are excluded: they feed every concept in their table without measuring any.
+-- Which concept each source variable feeds. BDC-VarLib lists phvs where a spec names them;
+-- the rest are resolved through mapping provenance: a derivation of the same spec file, BDCHM
+-- class and dataset as the concept read them. Measurements nested in a
+-- MeasurementObservationSet count as MeasurementObservation, as BDC-VarLib files them. Join
+-- keys (participant ids read only inside an expr) are excluded: they feed every concept in
+-- their table without measuring any.
 CREATE OR REPLACE VIEW varlib.variable_concept AS
 SELECT DISTINCT ds.phv, cs.concept_id, 'mapping_provenance' AS via
 FROM varlib.derivation_source ds
 JOIN varlib.derivation d ON d.id = ds.derivation_id
 JOIN varlib.concept_source cs ON cs.source_file = d.spec_path
+JOIN varlib.concept c ON c.id = cs.concept_id
+ AND (c.bdchm_class = d.bdchm_class
+      OR (c.bdchm_class = 'MeasurementObservation' AND d.bdchm_class = 'MeasurementObservationSet'))
+JOIN varlib.concept_dataset cd ON cd.concept_id = c.id AND cd.pht = d.pht
 WHERE NOT coalesce(ds.via_expression, false)
 UNION
 SELECT phv, concept_id, 'declared' AS via
@@ -66,11 +72,12 @@ anchors AS (
 )
 SELECT
     c.id,
+    c.code,
     c.slot_name,
-    replace(c.slot_name, '_', ' ') AS display_name,
+    coalesce(c.title, c.code) AS display_name,
     c.category,
     c.bdchm_class,
-    coalesce(a.anchor_labels[1], replace(c.slot_name, '_', ' ')) AS name,
+    coalesce(c.title, c.code) AS name,
     a.anchor_ids,
     a.anchor_node_ids,
     a.anchor_labels,
@@ -89,7 +96,7 @@ WITH concepts AS (
     SELECT
         vc.phv,
         list(DISTINCT c.id ORDER BY c.id) AS concept_ids,
-        list(DISTINCT replace(c.slot_name, '_', ' ')) AS concept_names,
+        list(DISTINCT coalesce(c.title, c.code)) AS concept_names,
         list(DISTINCT c.category) FILTER (WHERE c.category IS NOT NULL) AS categories
     FROM varlib.variable_concept vc
     JOIN varlib.concept c ON c.id = vc.concept_id

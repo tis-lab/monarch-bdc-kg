@@ -4,7 +4,9 @@ Reads three teammate outputs (see varlib.yaml), each optional so a partial load 
 
   --variable-library    YAML from `dm-bip extract-variable-library` (linkml/dm-bip#376)
   --mapping-provenance  YAML from `dm-bip extract-mapping-provenance`
-  --concepts-dir        tis-lab/BDC-VarLib src/bdc_varlib/schema/
+  --concepts-dir        schema modules from tis-lab/BDC-VarLib's scripts/build_bdc_varlib.py, run over
+                        the same HV specs (one slot per concept code)
+  --source-repos        the checkouts these came from, recorded with their commits
   --sssom               SSSOM TSVs appended to the KG's main.mappings table (e.g. the OMOP
                         bridges from monarch-mapping-commons#86), stamped with the file stem
                         as mapping_source like the base sets, and replaced on reload
@@ -38,6 +40,12 @@ def split_list(value) -> list[str]:
 def as_float(value):
     text = str(value).strip() if value is not None else ""
     return float(text) if NUMERIC.match(text) else None
+
+
+def derived_class(derivation_id: str) -> str | None:
+    """`Condition` from dmcprov:ARIC-ingest/afib/Condition/pht004037."""
+    parts = derivation_id.removeprefix("dmcprov:").split("/")
+    return parts[2] if len(parts) >= 4 else None
 
 
 def spec_path(spec_id: str) -> str | None:
@@ -171,6 +179,7 @@ class Loader:
                         part["id"],
                         spec_id,
                         spec_path(spec_id) if spec_id else None,
+                        derived_class(part["id"]),
                         study_id,
                         phts[0] if phts else None,
                         part.get("name"),
@@ -199,7 +208,8 @@ class Loader:
         concepts, mappings, sources, datasets, declared, enum_values = [], [], [], [], [], []
         for module_path in sorted(schema_dir.glob("bdc_varlib_*.yaml")):
             module = yaml.safe_load(module_path.read_text()) or {}
-            category = (module.get("title") or "").split("—")[-1].strip() or None
+            # module per BDCHM class: "BDC Variable Library: Condition"
+            category = (module.get("title") or "").split(":")[-1].strip() or None
             for enum_name, enum in (module.get("enums") or {}).items():
                 for value, pv in ((enum or {}).get("permissible_values") or {}).items():
                     pv = pv or {}
@@ -210,6 +220,7 @@ class Loader:
                 concepts.append(
                     (
                         concept_id,
+                        notes.get("concept_id"),
                         slot_name,
                         category,
                         module.get("name"),
@@ -239,8 +250,8 @@ class Loader:
         self.insert("concept_dataset", datasets)
         self.insert("concept_variable_declared", declared)
         self.insert("enum_value", enum_values)
-        repo = schema_dir.parents[2]
-        self.manifest("concepts", schema_dir, count, repo="tis-lab/BDC-VarLib", commit=git_commit(repo))
+        entry = schema_dir / "bdc_varlib.yaml"
+        self.manifest("concepts", schema_dir, count, digest=sha256(entry) if entry.exists() else None)
         print(
             f"  BDC-VarLib: {count} concepts, {len(mappings)} mappings, {len(sources)} sources, "
             f"{len(declared)} declared phvs, {len(enum_values)} enum values"
@@ -271,6 +282,7 @@ def main():
     parser.add_argument("--mapping-provenance", type=Path, nargs="*", default=[])
     parser.add_argument("--concepts-dir", type=Path)
     parser.add_argument("--sssom", type=Path, nargs="*", default=[])
+    parser.add_argument("--source-repos", type=Path, nargs="*", default=[])
     args = parser.parse_args()
 
     con = duckdb.connect(str(args.db))
@@ -285,6 +297,10 @@ def main():
         loader.concepts(args.concepts_dir)
     for path in args.sssom:
         load_sssom(con, path)
+    for repo in args.source_repos:
+        commit = git_commit(repo)
+        loader.manifest("source_repo", repo, 0, repo=repo.name, commit=commit)
+        print(f"  {repo.name} @ {commit}")
     con.execute((ROOT / "sql" / "varlib_views.sql").read_text())
     con.close()
 
