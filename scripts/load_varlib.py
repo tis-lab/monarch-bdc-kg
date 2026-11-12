@@ -8,9 +8,9 @@ Reads three teammate outputs (see varlib.yaml), each optional so a partial load 
                         the same HV specs (one slot per concept code)
   --variable-schema     linkml/bdc-variable-library's schema; each variable class becomes a row
   --source-repos        the checkouts these came from, recorded with their commits
-  --sssom               SSSOM TSVs appended to the KG's main.mappings table (e.g. the OMOP
-                        bridges from monarch-mapping-commons#86), stamped with the file stem
-                        as mapping_source like the base sets, and replaced on reload
+  --sssom               SSSOM TSVs loaded into varlib.bridge_mapping (e.g. the OMOP bridges
+                        from monarch-mapping-commons#86), stamped with the file stem as
+                        mapping_source; the KG's own main.mappings is never modified
 
 Recreates every varlib table (sql/varlib_schema.sql), then the views (sql/varlib_views.sql).
 """
@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = re.compile(r"([A-Za-z0-9_]+-ingest/[^/]+\.yaml)$")
 NUMERIC = re.compile(r"^-?\d+(\.\d+)?([eE][-+]?\d+)?$")
 NOT_LISTED = "derived via expr"
+PHS = re.compile(r"^phs\d+")
 CURIE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._-]+$")
 VARIABLE_KINDS = ("IntegratedVariable", "CompoundVariable")
 
@@ -159,8 +160,11 @@ class Loader:
                 if found:
                     cohort = found.split("-ingest/")[0]
                     break
-            studies[study_id] = (study_id, study_id.rsplit("/", 1)[-1], cohort, record.get("name"))
+            accession = study_id.rsplit("/", 1)[-1]
+            phs = accession if PHS.match(accession) else None  # placeholders like dmcprov:JHS-ingest have none
+            studies[study_id] = (study_id, phs, cohort, record.get("name"))
 
+            # (pht, phv) pairs read only inside an expression in that dataset (e.g. join keys)
             via_expr = set()
             for part in parts:
                 if part.get("entity_type") == "dataset":
@@ -168,7 +172,7 @@ class Loader:
                     datasets.setdefault(pht, (pht, study_id, None))
                     for var in part.get("has_part") or []:
                         if "(via expression)" in (var.get("description") or ""):
-                            via_expr.add(var["id"].removeprefix("dbgap:"))
+                            via_expr.add((pht, var["id"].removeprefix("dbgap:")))
 
             for part in parts:
                 derived_from = part.get("derived_from")
@@ -189,7 +193,8 @@ class Loader:
                         part.get("name"),
                     )
                 )
-                sources.extend((part["id"], phv, phv in via_expr) for phv in phvs)
+                pht = phts[0] if phts else None
+                sources.extend((part["id"], phv, (pht, phv) in via_expr) for phv in phvs)
 
         if studies:
             self.con.executemany(
@@ -307,20 +312,23 @@ def library_variables(loader: "Loader", schema_path: Path):
 
 
 def load_sssom(con: duckdb.DuckDBPyConnection, path: Path):
-    """Append one SSSOM TSV to main.mappings, replacing any earlier load of the same file."""
+    """Load one SSSOM TSV into varlib.bridge_mapping, stamped with its file stem.
+
+    Bridges stay in the varlib schema so the KG's own main.mappings is never modified;
+    varlib.concept_anchor reads both.
+    """
     source = path.name.removesuffix(".tsv")  # omop2loinc.sssom, matching the base sets' convention
-    columns = [row[0] for row in con.execute("DESCRIBE main.mappings").fetchall()]
+    columns = [row[0] for row in con.execute("DESCRIBE varlib.bridge_mapping").fetchall()]
     lines = [line for line in path.read_text().splitlines() if line and not line.startswith("#")]
     rows = list(csv.DictReader(lines, delimiter="\t"))
-    con.execute("DELETE FROM main.mappings WHERE mapping_source = ?", [source])
     values = [[source if c == "mapping_source" else (row.get(c) or None) for c in columns] for row in rows]
     if values:
-        con.executemany(f"INSERT INTO main.mappings VALUES ({', '.join('?' * len(columns))})", values)
+        con.executemany(f"INSERT INTO varlib.bridge_mapping VALUES ({', '.join('?' * len(columns))})", values)
     con.execute(
         "INSERT INTO varlib.load_manifest (input, path, sha256, row_count) VALUES ('sssom', ?, ?, ?)",
         [str(path), sha256(path), len(values)],
     )
-    print(f"  {path.name}: {len(values)} mappings into main.mappings as {source}")
+    print(f"  {path.name}: {len(values)} bridge mappings as {source}")
 
 
 def main():
@@ -335,6 +343,8 @@ def main():
     args = parser.parse_args()
 
     con = duckdb.connect(str(args.db))
+    # One transaction: a failure part-way leaves the previous varlib load in place.
+    con.begin()
     con.execute((ROOT / "sql" / "varlib_schema.sql").read_text())
     loader = Loader(con)
     print(f"Loading varlib into {args.db}")
@@ -353,6 +363,7 @@ def main():
         loader.manifest("source_repo", repo, 0, repo=repo.name, commit=commit)
         print(f"  {repo.name} @ {commit}")
     con.execute((ROOT / "sql" / "varlib_views.sql").read_text())
+    con.commit()
     con.close()
 
 

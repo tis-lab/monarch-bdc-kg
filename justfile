@@ -101,7 +101,8 @@ varlib-sources:
     while read -r name url ref commit; do
         repo={{varlib_dir}}/src/$name
         [ -d "$repo/.git" ] || git clone -q "$url" "$repo"
-        git -C "$repo" fetch -q origin "$ref"
+        # fetch the pinned commit itself, so a force-pushed PR ref can't strand the pin
+        git -C "$repo" fetch -q origin "$commit" || git -C "$repo" fetch -q origin "$ref"
         git -C "$repo" checkout -q "$commit"
         echo "$name @ $commit"
     done
@@ -126,17 +127,21 @@ varlib-extract:
     # Concepts: BDC-VarLib's own build, run against the pinned HV checkout so concepts and
     # variables come from one commit, and named with the KG's labels rather than spec file names
     cd {{justfile_directory()}}
-    uv run python -c 'import duckdb, sys; duckdb.connect(sys.argv[1], read_only=True).execute(f"COPY (SELECT id, name FROM nodes WHERE trim(coalesce(name, \x27\x27)) <> \x27\x27 AND coalesce(provided_by, \x27\x27) NOT IN (\x27procedure_to_disease_snomedct_nodes\x27)) TO \x27{sys.argv[2]}\x27 (DELIMITER \x27\t\x27, HEADER false)")' \
-        {{db}} "$out/kg-labels.tsv"
+    uv run scripts/export_kg_labels.py {{db}} "$out/kg-labels.tsv"
     rm -rf "$out/bdc-varlib"
     cd {{varlib_dir}}/src/BDC-VarLib && uv sync -q && uv run python scripts/build_bdc_varlib.py \
         --repo-dir {{varlib_dir}}/src/NHLBI-BDC-DMC-HV --labels "$out/kg-labels.tsv" --outdir "$out/bdc-varlib"
 
 # Load whatever varlib-extract produced (variables, provenance, concepts) into {{db}}
 varlib-load:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob  # inputs varlib-extract hasn't produced are skipped, not passed as literal globs
+    provenance=({{varlib_dir}}/out/mapping-provenance.yaml)
+    libraries=({{varlib_dir}}/out/*-variable-library.yaml)
     uv run scripts/load_varlib.py {{db}} \
-        --mapping-provenance {{varlib_dir}}/out/mapping-provenance.yaml \
-        --variable-library {{varlib_dir}}/out/*-variable-library.yaml \
+        --mapping-provenance ${provenance[@]+"${provenance[@]}"} \
+        --variable-library ${libraries[@]+"${libraries[@]}"} \
         --concepts-dir {{varlib_dir}}/out/bdc-varlib \
         --variable-schema {{varlib_dir}}/src/bdc-variable-library/src/bdc_variable_library/schema/bdc_variable_library.yaml \
         --source-repos {{varlib_dir}}/src/* \

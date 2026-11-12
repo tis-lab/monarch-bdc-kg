@@ -159,3 +159,8 @@ CREATE OR REPLACE TABLE varlib.library_variable_code (
     slot         VARCHAR NOT NULL,            -- condition_type, drug_type, procedure_type, ...
     code         VARCHAR NOT NULL             -- OMOP:321318, ATC:B01AC06, ...
 );
+
+-- SSSOM bridges for concept codes the KG doesn't carry (e.g. OMOP -> LOINC / SNOMED CT from
+-- monarch-mapping-commons#86). Same columns as main.mappings, kept here so loading the
+-- variable library never modifies the KG's own tables.
+CREATE OR REPLACE TABLE varlib.bridge_mapping AS SELECT * FROM main.mappings LIMIT 0;

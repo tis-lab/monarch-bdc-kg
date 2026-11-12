@@ -47,3 +47,8 @@ cohorts:
     spec_dir: ARIC-ingest
   - key: jhs
     spec_dir: JHS-ingest
+
+# provided_by values whose node labels are restricted (licensed) and must not become concept
+# names; scripts/export_kg_labels.py leaves those nodes out of the labels file
+restricted_label_sources:
+  - procedure_to_disease_snomedct_nodes

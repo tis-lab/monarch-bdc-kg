@@ -53,14 +53,17 @@ Requires `gcloud` auth with access to the Monarch GCS buckets.
 ## Variable library (exploratory)
 
 `just varlib` loads the BDC variable library into a `varlib` schema in the same
-duckdb, beside the KG tables rather than in `nodes`/`edges`. Inputs are pinned by
-commit in [`varlib.yaml`](varlib.yaml):
+duckdb, beside the KG tables. It never modifies the KG's own tables, so the KGX export,
+verify and coverage are unaffected; a duckdb uploaded after `just varlib` does carry the
+`varlib` schema (public metadata only, no participant data). The load runs in one
+transaction. Inputs are pinned by commit in [`varlib.yaml`](varlib.yaml):
 
 | input | from | gives |
 |---|---|---|
 | variable library | `dm-bip extract-variable-library` ([linkml/dm-bip#376](https://github.com/linkml/dm-bip/pull/376)) | per-phv `SingleContinuousVariable` / `SingleCategoricalVariable` entries of [bdc-variable-library](https://github.com/linkml/bdc-variable-library) |
 | mapping provenance | `dm-bip extract-mapping-provenance` | which phvs each HV trans-spec reads |
 | concepts | [tis-lab/BDC-VarLib](https://github.com/tis-lab/BDC-VarLib)'s `scripts/build_bdc_varlib.py`, run over the same pinned specs | one concept per code a BDCHM class uses (e.g. MONDO:0005044), named with the KG's label |
+| SSSOM bridges | [monarch-mapping-commons#86](https://github.com/monarch-initiative/monarch-mapping-commons/pull/86) (OMOP → LOINC / SNOMED CT) | `varlib.bridge_mapping`: one hop for concept codes the KG doesn't carry |
 | library variables | [linkml/bdc-variable-library](https://github.com/linkml/bdc-variable-library) schema, read with SchemaView | its Integrated / Compound variable classes as rows, with the unit, method and concept codes of the record each instantiates |
 
 Tables are in [`sql/varlib_schema.sql`](sql/varlib_schema.sql), and views joining
