@@ -214,3 +214,14 @@ SELECT
     list(DISTINCT term_kind ORDER BY term_kind) AS term_kinds
 FROM words
 GROUP BY word;
+
+-- bdc-variable-library variables to harmonized concepts, by the concept code the variable's
+-- microschema record fixes (prefix compared case-insensitively). Integrated variables carry no
+-- code in the schema yet, so only compound variables with a condition, drug or procedure code
+-- link here.
+CREATE OR REPLACE VIEW varlib.library_variable_concept AS
+SELECT DISTINCT lc.variable_id, c.id AS concept_id, lc.code
+FROM varlib.library_variable_code lc
+JOIN varlib.concept c
+  ON upper(split_part(c.code, ':', 1)) || substr(c.code, position(':' IN c.code))
+   = upper(split_part(lc.code, ':', 1)) || substr(lc.code, position(':' IN lc.code));

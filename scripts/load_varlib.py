@@ -6,6 +6,7 @@ Reads three teammate outputs (see varlib.yaml), each optional so a partial load 
   --mapping-provenance  YAML from `dm-bip extract-mapping-provenance`
   --concepts-dir        schema modules from tis-lab/BDC-VarLib's scripts/build_bdc_varlib.py, run over
                         the same HV specs (one slot per concept code)
+  --variable-schema     linkml/bdc-variable-library's schema; each variable class becomes a row
   --source-repos        the checkouts these came from, recorded with their commits
   --sssom               SSSOM TSVs appended to the KG's main.mappings table (e.g. the OMOP
                         bridges from monarch-mapping-commons#86), stamped with the file stem
@@ -23,11 +24,14 @@ from pathlib import Path
 
 import duckdb
 import yaml
+from linkml_runtime.utils.schemaview import SchemaView
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = re.compile(r"([A-Za-z0-9_]+-ingest/[^/]+\.yaml)$")
 NUMERIC = re.compile(r"^-?\d+(\.\d+)?([eE][-+]?\d+)?$")
 NOT_LISTED = "derived via expr"
+CURIE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._-]+$")
+VARIABLE_KINDS = ("IntegratedVariable", "CompoundVariable")
 
 
 def split_list(value) -> list[str]:
@@ -258,6 +262,50 @@ class Loader:
         )
 
 
+def fixed_values(slot) -> list[str]:
+    """Values a slot is pinned to: equals_string, or each equals_string of an any_of."""
+    values = [slot.equals_string] if slot.equals_string else []
+    values += [alt.equals_string for alt in slot.any_of or [] if alt.equals_string]
+    return values
+
+
+def library_variables(loader: "Loader", schema_path: Path):
+    """One row per variable class of linkml/bdc-variable-library.
+
+    The schema models each harmonized variable as a class; SchemaView resolves the microschema
+    record each instantiates (through inheritance and imports), whose slot_usage pins its unit,
+    method and concept codes.
+    """
+    sv = SchemaView(str(schema_path))
+    classes = sv.all_classes()
+    variables, codes = [], []
+    for name in sorted(classes):
+        ancestors = sv.class_ancestors(name)
+        kind = next((k for k in VARIABLE_KINDS if k in ancestors and k != name), None)
+        if kind is None:
+            continue
+        cls = sv.get_class(name)
+        records = [r for r in (cls.instantiates or []) if r in classes]
+        unit = method = record_description = None
+        for record in records:
+            record_description = record_description or sv.get_class(record).description
+            for slot in sv.class_induced_slots(record):
+                values = fixed_values(slot)
+                if not values:
+                    continue
+                if slot.name == "unit":
+                    unit = unit or values[0]
+                elif slot.name == "method":
+                    method = method or values[0]
+                elif slot.name.endswith("_type"):
+                    codes.extend((name, slot.name, v) for v in values if CURIE.match(v))
+        variables.append((name, kind, cls.is_a, cls.description, records, record_description, unit, method))
+    count = loader.insert("library_variable", variables)
+    loader.insert("library_variable_code", list(dict.fromkeys(codes)))
+    loader.manifest("library_variables", schema_path, count, digest=sha256(schema_path))
+    print(f"  bdc-variable-library: {count} variable classes, {len(set(codes))} concept codes")
+
+
 def load_sssom(con: duckdb.DuckDBPyConnection, path: Path):
     """Append one SSSOM TSV to main.mappings, replacing any earlier load of the same file."""
     source = path.name.removesuffix(".tsv")  # omop2loinc.sssom, matching the base sets' convention
@@ -281,6 +329,7 @@ def main():
     parser.add_argument("--variable-library", type=Path, nargs="*", default=[])
     parser.add_argument("--mapping-provenance", type=Path, nargs="*", default=[])
     parser.add_argument("--concepts-dir", type=Path)
+    parser.add_argument("--variable-schema", type=Path)
     parser.add_argument("--sssom", type=Path, nargs="*", default=[])
     parser.add_argument("--source-repos", type=Path, nargs="*", default=[])
     args = parser.parse_args()
@@ -295,6 +344,8 @@ def main():
         loader.variable_library(path)
     if args.concepts_dir:
         loader.concepts(args.concepts_dir)
+    if args.variable_schema:
+        library_variables(loader, args.variable_schema)
     for path in args.sssom:
         load_sssom(con, path)
     for repo in args.source_repos:

@@ -138,6 +138,7 @@ varlib-load:
         --mapping-provenance {{varlib_dir}}/out/mapping-provenance.yaml \
         --variable-library {{varlib_dir}}/out/*-variable-library.yaml \
         --concepts-dir {{varlib_dir}}/out/bdc-varlib \
+        --variable-schema {{varlib_dir}}/src/bdc-variable-library/src/bdc_variable_library/schema/bdc_variable_library.yaml \
         --source-repos {{varlib_dir}}/src/* \
         --sssom $(uv run python -c 'import yaml; print(" ".join("{{varlib_dir}}/src/" + p for p in yaml.safe_load(open("varlib.yaml"))["sssom"]))')
 
