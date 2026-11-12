@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use axum::body::Bytes;
 use serde::{Deserialize, Serialize};
 
 /// File names inside the index directory, written by scripts/export_search.py.
@@ -30,11 +31,11 @@ pub struct SourceMapping {
     pub source_file: String,
 }
 
-/// A spec file (by name) that assigns the concept, and in which studies: the middleware's
-/// `BdcCarrier`.
+/// A carrier: a spec file (by name) that assigns the concept, and in which studies. The
+/// middleware's `BdcCarrier`, which its index calls a "variable" (`variableName` = file stem).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConceptVariable {
+pub struct Carrier {
     pub variable_name: String,
     pub variable_label: Option<String>,
     pub studies: Vec<String>,
@@ -48,15 +49,16 @@ pub struct Concept {
     #[serde(rename = "conceptType")]
     pub curie: String,
     pub concept_label: Option<String>,
-    /// The label, else the CURIE (computed in the SQL): never null and never a file name.
-    #[serde(default)]
+    /// The label, else the CURIE: never null and never a file name. Computed in
+    /// sql/search_concept.sql.
     pub display_label: String,
     pub bdchm_type: Option<String>,
     pub bdchm_classes: Vec<String>,
     pub source_mappings: Vec<SourceMapping>,
     pub study_count: usize,
     pub studies: Vec<String>,
-    pub variables: Vec<ConceptVariable>,
+    /// The carriers; "variables" in the middleware's format.
+    pub variables: Vec<Carrier>,
     /// Additions the middleware's parser ignores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kg_node_id: Option<String>,
@@ -93,7 +95,7 @@ pub struct HarmonizedConcepts {
     words: Vec<HashSet<String>>,
     by_key: HashMap<String, usize>,
     /// `/bdc/harmonized-index.json`, built once since the concepts never change while served.
-    index_json: Vec<u8>,
+    index_json: Bytes,
 }
 
 /// The middleware's concept key: prefix upper-cased, local part as written.
@@ -154,11 +156,6 @@ impl HarmonizedConcepts {
     }
 
     fn new(mut concepts: Vec<Concept>, meta: Meta) -> Result<HarmonizedConcepts> {
-        for c in &mut concepts {
-            if c.display_label.trim().is_empty() {
-                c.display_label = c.concept_label.clone().unwrap_or_else(|| c.curie.clone());
-            }
-        }
         concepts.sort_by(|a, b| {
             b.study_count
                 .cmp(&a.study_count)
@@ -182,7 +179,7 @@ impl HarmonizedConcepts {
             .enumerate()
             .map(|(i, c)| (concept_key(&c.curie), i))
             .collect();
-        let index_json = serde_json::to_vec(&index_document(&concepts, &meta))?;
+        let index_json = Bytes::from(serde_json::to_vec(&index_document(&concepts, &meta))?);
         Ok(HarmonizedConcepts {
             concepts,
             words,
@@ -249,8 +246,8 @@ impl HarmonizedConcepts {
     }
 
     /// The whole set in the middleware's harmonized-index format, as JSON bytes.
-    pub fn index_json(&self) -> &[u8] {
-        &self.index_json
+    pub fn index_json(&self) -> Bytes {
+        self.index_json.clone()
     }
 }
 
@@ -302,7 +299,7 @@ pub mod tests {
         Concept {
             curie: curie.into(),
             concept_label: label.map(Into::into),
-            display_label: String::new(),
+            display_label: label.unwrap_or(curie).into(),
             bdchm_type: Some("condition".into()),
             bdchm_classes: vec!["Condition".into()],
             source_mappings: vec![],
@@ -310,7 +307,7 @@ pub mod tests {
             studies: studies.clone(),
             variables: files
                 .iter()
-                .map(|f| ConceptVariable {
+                .map(|f| Carrier {
                     variable_name: f.to_string(),
                     variable_label: None,
                     studies: studies.clone(),
@@ -383,16 +380,8 @@ pub mod tests {
     }
 
     #[test]
-    fn display_label_falls_back_to_curie() {
-        assert_eq!(
-            sample().get("HP:0000822").unwrap().display_label,
-            "HP:0000822"
-        );
-    }
-
-    #[test]
     fn index_json_uses_the_middleware_field_names() {
-        let doc: serde_json::Value = serde_json::from_slice(sample().index_json()).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&sample().index_json()).unwrap();
         assert_eq!(doc["schemaVersion"], 2);
         assert_eq!(doc["concepts"][0]["conceptType"], "MONDO:0005044");
         assert_eq!(doc["concepts"][0]["displayLabel"], "hypertensive disorder");

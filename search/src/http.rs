@@ -5,7 +5,8 @@
 //!
 //! Paging comes in two kinds, as in Solr and Elasticsearch:
 //!   offset   Monarch's `limit` + `offset`, up to monarch::MAX_RESULT_WINDOW deep
-//!   cursor   `cursor=*`, then each response's `next_cursor`; any depth, cheap at every page
+//!   cursor   `cursor=*`, then each response's `next_cursor`; any depth, at the same cost per
+//!            page however deep (each page still scores every match)
 
 use std::sync::Arc;
 
@@ -98,7 +99,7 @@ async fn search(State(app): State<App>, RawQuery(raw): RawQuery) -> Result<Respo
     let q = params.one("q").unwrap_or(monarch::MATCH_ALL).to_owned();
     let categories = params.all("category");
     let limit = params.count("limit", monarch::DEFAULT_LIMIT, Some(monarch::MAX_LIMIT))?;
-    let page = page(&params, limit, &app.entities)?;
+    let page = page(&params, &q, &categories, limit, &app.entities)?;
     let results = blocking({
         let app = app.clone();
         move || {
@@ -114,23 +115,50 @@ async fn search(State(app): State<App>, RawQuery(raw): RawQuery) -> Result<Respo
     Ok(Json(app.with_coverage(results)).into_response())
 }
 
-/// Offset paging unless a `cursor` is given; offset paging stops at the result window.
-fn page(params: &Params, limit: usize, entities: &EntityIndex) -> Result<Page, ApiError> {
+/// Offset paging unless a `cursor` is given. Each paging rule and its message, in one place.
+fn page(
+    params: &Params,
+    q: &str,
+    categories: &[String],
+    limit: usize,
+    entities: &EntityIndex,
+) -> Result<Page, ApiError> {
     let offset = params.count("offset", 0, None)?;
     let Some(cursor) = params.one("cursor") else {
         if offset + limit > monarch::MAX_RESULT_WINDOW {
-            return Err(ApiError::PastResultWindow);
+            let msg = format!(
+                "offset + limit must be at most {}; page deeper with cursor=* and next_cursor",
+                monarch::MAX_RESULT_WINDOW
+            );
+            return Err(ApiError::invalid("offset", &offset.to_string(), &msg));
         }
         return Ok(Page::Offset(offset));
     };
     if offset > 0 {
-        return Err(ApiError::CursorWithOffset);
+        let msg = "cursor paging always starts at offset 0; leave offset out";
+        return Err(ApiError::invalid("cursor", cursor, msg));
     }
     if cursor == "*" {
-        return Ok(Page::Cursor(None));
+        return Ok(Page::CursorStart);
     }
-    let cursor = entities.cursor(cursor).map_err(ApiError::BadCursor)?;
-    Ok(Page::Cursor(Some(cursor)))
+    match entities.cursor(cursor, q, categories) {
+        Ok(after) => Ok(Page::After(after)),
+        Err(CursorError::Malformed) => Err(ApiError::invalid(
+            "cursor",
+            cursor,
+            "Not a cursor from this API; start with cursor=*",
+        )),
+        Err(CursorError::Expired) => Err(ApiError::invalid(
+            "cursor",
+            cursor,
+            "Cursor is from an earlier index build; start again with cursor=*",
+        )),
+        Err(CursorError::OtherQuery) => Err(ApiError::invalid(
+            "cursor",
+            cursor,
+            "Cursor belongs to a different q or category; start again with cursor=*",
+        )),
+    }
 }
 
 async fn entity(State(app): State<App>, Path(id): Path<String>) -> Result<Response, ApiError> {
@@ -145,7 +173,8 @@ async fn entity(State(app): State<App>, Path(id): Path<String>) -> Result<Respon
 /// of its bundled file (HARMONIZED_INDEX=http://.../bdc/harmonized-index.json).
 async fn harmonized_index(State(app): State<App>) -> Result<Response, ApiError> {
     let concepts = app.concepts.ok_or(ApiError::NotFound("Harmonized index"))?;
-    let body = concepts.index_json().to_vec();
+    // Bytes clone is a reference-count bump, not a copy of the document.
+    let body = concepts.index_json();
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
@@ -272,12 +301,9 @@ enum ApiError {
         input: String,
         msg: String,
     },
-    PastResultWindow,
-    CursorWithOffset,
-    BadCursor(CursorError),
     /// 404 for an id or resource that isn't here.
     NotFound(&'static str),
-    /// 500, logged.
+    /// 500. The cause is logged, not returned: it can name server paths.
     Internal(anyhow::Error),
 }
 
@@ -299,40 +325,16 @@ impl From<anyhow::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        // FastAPI's shape for invalid query parameters.
-        let unprocessable = |key: &str, input: &str, msg: &str| {
-            let detail = json!([{ "loc": ["query", key], "msg": msg, "input": input }]);
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({ "detail": detail })),
-            )
-                .into_response()
-        };
         match self {
-            ApiError::Invalid { key, input, msg } => unprocessable(key, &input, &msg),
-            ApiError::PastResultWindow => unprocessable(
-                "offset",
-                "",
-                &format!(
-                    "offset + limit must be at most {}; page deeper with cursor=* and next_cursor",
-                    monarch::MAX_RESULT_WINDOW
-                ),
-            ),
-            ApiError::CursorWithOffset => unprocessable(
-                "cursor",
-                "",
-                "cursor paging always starts at offset 0; leave offset out",
-            ),
-            ApiError::BadCursor(CursorError::Malformed) => unprocessable(
-                "cursor",
-                "",
-                "Not a cursor from this API; start with cursor=*",
-            ),
-            ApiError::BadCursor(CursorError::Expired) => unprocessable(
-                "cursor",
-                "",
-                "Cursor is from an earlier index build; start again with cursor=*",
-            ),
+            // FastAPI's shape for an invalid query parameter.
+            ApiError::Invalid { key, input, msg } => {
+                let detail = json!([{ "loc": ["query", key], "msg": msg, "input": input }]);
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "detail": detail })),
+                )
+                    .into_response()
+            }
             ApiError::NotFound(what) => (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "detail": format!("{what} not found") })),
@@ -342,7 +344,7 @@ impl IntoResponse for ApiError {
                 tracing::error!(error = %e, "request failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "detail": e.to_string() })),
+                    Json(json!({ "detail": "Internal Server Error" })),
                 )
                     .into_response()
             }

@@ -6,8 +6,8 @@ Writes, into OUT_DIR:
                        duckdb has the varlib schema (`just varlib`)
   concepts-meta.json   the HV commit and date the concepts were built from
 
-Both SQL files read `search_nodes`, a view this script defines over `nodes` with the labels of
-restricted sources blanked (`restricted_label_sources` in varlib.yaml, the same list
+Both SQL files read `search_nodes`, a view this script defines over `nodes` with every label
+column (name, synonyms, description, ...) of restricted sources blanked (`restricted_label_sources` in varlib.yaml, the same list
 scripts/export_kg_labels.py uses). Defining it once here means a restricted source can't be
 blanked in one export and leaked by the other.
 """
@@ -26,17 +26,41 @@ def restricted_sources(config: Path) -> list[str]:
     return yaml.safe_load(config.read_text()).get("restricted_label_sources") or []
 
 
+# Columns that carry a node's labels or text: all blanked for restricted sources. Ids, xrefs
+# and categories are kept, so restricted nodes stay findable by id and keep their KG links.
+LABEL_COLUMNS = [
+    "name",
+    "full_name",
+    "symbol",
+    "description",
+    "synonym",
+    "exact_synonym",
+    "broad_synonym",
+    "narrow_synonym",
+    "related_synonym",
+]
+
+
 def define_search_nodes(con: duckdb.DuckDBPyConnection, restricted: list[str]):
-    """`nodes`, with `name` blanked where the label comes from a restricted source."""
-    con.execute("CREATE TEMP TABLE restricted_label_source (provided_by VARCHAR)")
+    """`nodes`, with every label column blanked where the node comes from a restricted source."""
+    con.execute("CREATE OR REPLACE TEMP TABLE restricted_label_source (provided_by VARCHAR)")
     con.executemany("INSERT INTO restricted_label_source VALUES (?)", [[s] for s in restricted])
+    present = {row[0] for row in con.execute("DESCRIBE nodes").fetchall()}
+    blanked = ",\n            ".join(
+        f"CASE WHEN restricted THEN NULL ELSE {column} END AS {column}"
+        for column in LABEL_COLUMNS
+        if column in present
+    )
     con.execute(
-        """
-        CREATE TEMP VIEW search_nodes AS
-        SELECT * REPLACE (
-            CASE WHEN provided_by IN (SELECT provided_by FROM restricted_label_source) THEN NULL ELSE name END AS name
+        f"""
+        CREATE OR REPLACE TEMP VIEW search_nodes AS
+        SELECT * EXCLUDE (restricted) REPLACE (
+            {blanked}
         )
-        FROM nodes
+        FROM (
+            SELECT *, coalesce(provided_by, '') IN (SELECT provided_by FROM restricted_label_source) AS restricted
+            FROM nodes
+        )
         """
     )
 
@@ -47,11 +71,16 @@ def export_json(con: duckdb.DuckDBPyConnection, sql_file: Path, out: Path):
     print(f"  {out.name}: {rows} rows")
 
 
+# The varlib tables the concept export reads; a partial load (interrupted, or older) is skipped.
+VARLIB_TABLES = ["concept", "concept_source", "load_manifest"]
+
+
 def has_varlib(con: duckdb.DuckDBPyConnection) -> bool:
     found = con.execute(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'varlib' AND table_name = 'concept'"
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'varlib' AND table_name IN ?",
+        [VARLIB_TABLES],
     ).fetchone()[0]
-    return found > 0
+    return found == len(VARLIB_TABLES)
 
 
 def concepts_meta(con: duckdb.DuckDBPyConnection) -> dict:
@@ -90,7 +119,7 @@ def main():
     else:
         for stale in ("concepts.jsonl", "concepts-meta.json"):
             (args.out_dir / stale).unlink(missing_ok=True)
-        print(f"  {args.db} has no varlib schema; skipping harmonized concepts (just varlib)")
+        print(f"  {args.db} has no complete varlib schema; skipping harmonized concepts (just varlib)")
 
 
 if __name__ == "__main__":

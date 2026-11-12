@@ -27,6 +27,8 @@ meaning nearby (Monarch, the portal middleware, the variable library), the diffe
   `varlib.concept`; the middleware's `BdcConcept`; what portal users pick.
 - **Mapping provenance** — which spec blocks read which phvs (from dm-bip). How a concept finds
   its dbGaP columns when the spec doesn't list them.
+- **Carrier** — a spec file that assigns a concept. The middleware's index calls it a
+  *variable* (`variableName` is the file stem); it is neither a phv nor a library variable.
 - **Library variable** — a variable class of linkml/bdc-variable-library
   (`IntegratedHeight001`, `CompoundAlbuminUrine001`), loaded as a row.
 
@@ -40,5 +42,8 @@ meaning nearby (Monarch, the portal middleware, the variable library), the diffe
   blank-search examples.
 - **Result window** — how deep offset paging may go (offset + limit ≤ 10,000). Deeper reads use
   **cursor paging**: `cursor=*`, then each page's `next_cursor`.
-- **Index version** — identifies one build of the entity index; cursors carry it, so a cursor
-  from an earlier build is refused rather than misread.
+- **Index version** — identifies one build of the entity index, as a hash of its segment ids.
+  Cursors carry it, so a cursor from an earlier build is refused rather than misread; replicas
+  serving copies of one index agree on it, so a cursor works on any of them.
+- **Cursor** — where a cursor page ended: index version, a fingerprint of `q` and the
+  categories, and the last hit's place in the ranking. It only continues its own search.

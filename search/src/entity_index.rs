@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -61,7 +62,7 @@ pub fn write_entities(
     let mut writer = index.writer(heap_bytes)?;
     let mut count = 0u64;
     for entity in entities {
-        writer.add_document(to_document(&fields, &entity?)?)?;
+        writer.add_document(schema::to_document(&fields, &entity?)?)?;
         count += 1;
         if count % 250_000 == 0 {
             tracing::info!(count, "indexed");
@@ -70,42 +71,6 @@ pub fn write_entities(
     writer.commit()?;
     writer.wait_merging_threads()?;
     Ok(count)
-}
-
-/// One entity as an index document: each source column into its index fields (see schema.rs).
-fn to_document(f: &Fields, e: &Entity) -> Result<TantivyDocument> {
-    let mut d = doc!(f.id => e.id.clone(), f.static_boost => e.static_boost);
-    let mut add = |fields: &[Field], value: &str| {
-        for &field in fields {
-            d.add_text(field, value);
-        }
-    };
-    if let Some(v) = &e.category {
-        add(&[f.category], v);
-    }
-    if let Some(v) = &e.name {
-        add(&[f.name, f.name_t, f.name_ac], v);
-    }
-    if let Some(v) = &e.symbol {
-        add(&[f.symbol, f.symbol_t, f.symbol_ac], v);
-    }
-    for v in e.synonym.iter().flatten() {
-        add(&[f.synonym, f.synonym_t, f.synonym_ac], v);
-    }
-    for v in e.exact_synonym.iter().flatten() {
-        add(&[f.exact_synonym], v);
-    }
-    if let Some(v) = &e.in_taxon_label {
-        add(&[f.in_taxon_label_t], v);
-    }
-    if let Some(v) = &e.description {
-        add(&[f.description_t], v);
-    }
-    for v in e.xref.iter().flatten() {
-        add(&[f.xref], v);
-    }
-    d.add_text(f.stored_entity, serde_json::to_string(e)?);
-    Ok(d)
 }
 
 /// One hit: the stored entity in Monarch's SearchResult shape.
@@ -124,6 +89,7 @@ pub struct SearchResult {
 #[derive(Debug, Serialize)]
 pub struct SearchResults {
     pub limit: usize,
+    /// The offset asked for; 0 for cursor pages, which have no offset.
     pub offset: usize,
     pub total: usize,
     pub items: Vec<SearchResult>,
@@ -137,24 +103,33 @@ pub struct SearchResults {
 pub enum Page {
     /// Skip this many hits (Monarch's `offset`).
     Offset(usize),
-    /// Start at the top (`cursor=*`), or after a hit a previous page ended on.
-    Cursor(Option<Cursor>),
+    /// The first page of a cursor walk (`cursor=*`).
+    CursorStart,
+    /// The page after the hit a previous page ended on (`cursor=<next_cursor>`).
+    After(Cursor),
 }
 
-/// Where a page ended: a hit's place in the ranking, for an index that never changes while
-/// served. Encoded for clients as `<index version>.<score>.<position>` in hex.
+/// Where a cursor page ended. Clients see it as four hex numbers,
+/// `<index version>.<query>.<score>.<tie break>`:
+///   - index version: which build of the index ranked the hits (see `EntityIndex::version`)
+///   - query: a fingerprint of `q` and the categories, so a cursor only continues its own search
+///   - score and tie break: the last hit's place in the ranking (`RankKey`)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cursor {
     index_version: u64,
+    query: u64,
     rank: RankKey,
 }
 
-/// A hit's place in the ranking: higher score first, then lower position (segment, doc) first,
-/// so every hit has its own place and pages never overlap or skip.
+/// A hit's place in the ranking. The derived ordering compares the fields top to bottom, so
+/// their order matters: higher score first, then, among equal scores, the hit stored earlier in
+/// the index. Every hit has its own place, so cursor pages never overlap or skip.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 struct RankKey {
     score: f64,
-    tie_break: u64, // u64::MAX - position, so that a lower position sorts higher
+    /// u64::MAX minus the hit's position (segment, document), so an earlier position is a
+    /// higher key.
+    tie_break: u64,
 }
 
 impl RankKey {
@@ -166,7 +141,9 @@ impl RankKey {
         }
     }
 
-    /// Sorts below every real hit; marks hits a cursor has already passed.
+    /// Lower than every real hit. tantivy keeps the N highest keys it is shown and can't skip
+    /// documents, so hits a cursor has already passed get this key: they lose to every hit not
+    /// yet returned, and are dropped after collection.
     const PASSED: RankKey = RankKey {
         score: f64::NEG_INFINITY,
         tie_break: 0,
@@ -175,41 +152,57 @@ impl RankKey {
 
 #[derive(Debug, PartialEq)]
 pub enum CursorError {
+    /// Not a cursor this API issued.
     Malformed,
-    /// The index was rebuilt since the cursor was issued.
+    /// Issued by an earlier build of the index.
     Expired,
+    /// Issued for a different `q` or `category`.
+    OtherQuery,
 }
 
 impl Cursor {
-    pub fn encode(&self) -> String {
+    fn encode(&self) -> String {
         format!(
-            "{:x}.{:x}.{:x}",
+            "{:x}.{:x}.{:x}.{:x}",
             self.index_version,
+            self.query,
             self.rank.score.to_bits(),
             self.rank.tie_break
         )
     }
 
-    pub fn decode(text: &str, index_version: u64) -> Result<Cursor, CursorError> {
+    fn decode(text: &str, index_version: u64, query: u64) -> Result<Cursor, CursorError> {
         let parts: Vec<u64> = text
             .split('.')
             .map(|p| u64::from_str_radix(p, 16))
             .collect::<Result<_, _>>()
             .map_err(|_| CursorError::Malformed)?;
-        let [version, score, tie_break] = parts[..] else {
+        let [version, query_of_cursor, score_bits, tie_break] = parts[..] else {
             return Err(CursorError::Malformed);
         };
+        let score = f64::from_bits(score_bits);
+        if !score.is_finite() {
+            return Err(CursorError::Malformed);
+        }
         if version != index_version {
             return Err(CursorError::Expired);
         }
+        if query_of_cursor != query {
+            return Err(CursorError::OtherQuery);
+        }
         Ok(Cursor {
             index_version: version,
-            rank: RankKey {
-                score: f64::from_bits(score),
-                tie_break,
-            },
+            query,
+            rank: RankKey { score, tie_break },
         })
     }
+}
+
+/// A fingerprint of a search, so a cursor only continues the search it came from.
+fn query_fingerprint(q: &str, categories: &[String]) -> u64 {
+    let mut categories = categories.to_vec();
+    categories.sort();
+    fnv1a(format!("{}\u{1f}{}", q.trim(), categories.join("\u{1f}")).as_bytes())
 }
 
 /// What to search for: Monarch's `q` and `category` filter, and the page.
@@ -225,7 +218,10 @@ pub struct EntityIndex {
     reader: IndexReader,
     fields: Fields,
     index: Index,
-    /// Identifies this build of the index, so cursors from an earlier build are refused.
+    /// Identifies this build of the index: a hash of its segment ids, which are fixed when the
+    /// index is built. Replicas serving copies of one index compute the same version, so a
+    /// cursor from one works on another; a rebuilt index has new segments, so its cursors
+    /// don't match and old ones are refused.
     version: u64,
 }
 
@@ -353,20 +349,15 @@ impl EntityIndex {
         searcher: &Searcher,
         q: &str,
         blank: bool,
-    ) -> Result<HashMap<SegmentId, HashMap<DocId, f64>>> {
-        let mut multipliers: HashMap<SegmentId, HashMap<DocId, f64>> = HashMap::new();
+    ) -> Result<HashMap<DocAddress, f64>> {
+        let mut multipliers: HashMap<DocAddress, f64> = HashMap::new();
         let mut multiply = |field: Field, value: &str, by: f64| -> Result<()> {
             let query = TermQuery::new(
                 Term::from_field_text(field, value),
                 IndexRecordOption::Basic,
             );
             for addr in searcher.search(&query, &DocSetCollector)? {
-                let segment = searcher.segment_reader(addr.segment_ord).segment_id();
-                *multipliers
-                    .entry(segment)
-                    .or_default()
-                    .entry(addr.doc_id)
-                    .or_insert(1.0) *= by;
+                *multipliers.entry(addr).or_insert(1.0) *= by;
             }
             Ok(())
         };
@@ -386,10 +377,12 @@ impl EntityIndex {
         &self,
         searcher: &Searcher,
         query: &BoxQuery,
-        multipliers: HashMap<SegmentId, HashMap<DocId, f64>>,
+        multipliers: HashMap<DocAddress, f64>,
         blank: bool,
         request: &SearchRequest,
     ) -> Result<SearchResults> {
+        // Segments are numbered by their place in the searcher; the cursor's tie break and the
+        // multipliers' DocAddress both use that number.
         let segment_ords: HashMap<SegmentId, u32> = searcher
             .segment_readers()
             .iter()
@@ -397,31 +390,35 @@ impl EntityIndex {
             .map(|(ord, reader)| (reader.segment_id(), ord as u32))
             .collect();
         let after = match &request.page {
-            Page::Cursor(Some(cursor)) => Some(cursor.rank),
+            Page::After(cursor) => Some(cursor.rank),
             _ => None,
         };
         let offset = match request.page {
             Page::Offset(n) => n,
-            Page::Cursor(_) => 0,
+            Page::CursorStart | Page::After(_) => 0,
         };
+        let multipliers = Arc::new(multipliers);
 
         // tantivy calls the outer closure once per index segment, to load that segment's static
-        // boosts and multipliers, and the inner one once per matching document in it.
+        // boosts, and the inner one once per matching document in it.
+        //
+        // Cursor pages: tantivy keeps only the N highest keys it is shown, so every hit at or
+        // above the cursor's place gets RankKey::PASSED; the N highest of the rest are the next
+        // page. Every page still scores every match; only the kept list stays small, so a deep
+        // page costs the same as the first.
         let scored_by_monarch = move |segment: &SegmentReader| {
             let static_boost = segment
                 .fast_fields()
                 .f64(schema::STATIC_BOOST)
                 .expect("static_boost is a fast field");
             let segment_ord = segment_ords[&segment.segment_id()];
-            let multipliers = multipliers
-                .get(&segment.segment_id())
-                .cloned()
-                .unwrap_or_default();
+            let multipliers = Arc::clone(&multipliers);
             move |doc: DocId, text_score: Score| {
                 let base = if blank { 1.0 } else { text_score as f64 };
+                let multiplier = multipliers.get(&DocAddress::new(segment_ord, doc));
                 let score = base
                     * static_boost.first(doc).unwrap_or(1.0)
-                    * multipliers.get(&doc).copied().unwrap_or(1.0);
+                    * multiplier.copied().unwrap_or(1.0);
                 let rank = RankKey::new(score, segment_ord, doc);
                 match after {
                     Some(cursor) if rank >= cursor => RankKey::PASSED,
@@ -446,6 +443,7 @@ impl EntityIndex {
             (true, Some((rank, _))) => Some(
                 Cursor {
                     index_version: self.version,
+                    query: query_fingerprint(request.q, request.categories),
                     rank: *rank,
                 }
                 .encode(),
@@ -485,9 +483,14 @@ impl EntityIndex {
             .transpose()
     }
 
-    /// Decode a client's cursor against this index.
-    pub fn cursor(&self, text: &str) -> Result<Cursor, CursorError> {
-        Cursor::decode(text, self.version)
+    /// Decode a client's cursor for this index and this search.
+    pub fn cursor(
+        &self,
+        text: &str,
+        q: &str,
+        categories: &[String],
+    ) -> Result<Cursor, CursorError> {
+        Cursor::decode(text, self.version, query_fingerprint(q, categories))
     }
 
     fn load(&self, searcher: &Searcher, addr: DocAddress) -> Result<Entity> {
@@ -661,12 +664,12 @@ pub mod tests {
             .collect();
         let index = index_of(entities);
         let mut by_cursor = Vec::new();
-        let mut page = Page::Cursor(None);
+        let mut page = Page::CursorStart;
         loop {
             let results = search(&index, "asthma", &[], 7, page);
             by_cursor.extend(ids(&results).iter().map(|s| s.to_string()));
             match results.next_cursor {
-                Some(next) => page = Page::Cursor(Some(index.cursor(&next).unwrap())),
+                Some(next) => page = Page::After(index.cursor(&next, "asthma", &[]).unwrap()),
                 None => break,
             }
         }
@@ -684,9 +687,31 @@ pub mod tests {
     }
 
     #[test]
-    fn cursors_from_another_build_are_refused() {
-        let index = index_of(vec![entity("MONDO:1", "asthma", "biolink:Disease", 1.3)]);
-        assert_eq!(index.cursor("1.2.3"), Err(CursorError::Expired));
-        assert_eq!(index.cursor("nonsense"), Err(CursorError::Malformed));
+    fn cursors_only_continue_their_own_search_on_their_own_index() {
+        let index = index_of(vec![
+            entity("MONDO:1", "asthma", "biolink:Disease", 1.3),
+            entity("MONDO:2", "allergic asthma", "biolink:Disease", 1.3),
+        ]);
+        let page = search(&index, "asthma", &[], 1, Page::CursorStart);
+        let cursor = page.next_cursor.unwrap();
+        assert!(index.cursor(&cursor, "asthma", &[]).is_ok());
+        assert_eq!(
+            index.cursor(&cursor, "heart", &[]),
+            Err(CursorError::OtherQuery)
+        );
+        assert_eq!(
+            index.cursor("1.2.3.4", "asthma", &[]),
+            Err(CursorError::Expired)
+        );
+        assert_eq!(
+            index.cursor("nonsense", "asthma", &[]),
+            Err(CursorError::Malformed)
+        );
+        let version_and_query = cursor.rsplitn(3, '.').nth(2).unwrap();
+        let nan = format!("{version_and_query}.{:x}.0", f64::NAN.to_bits());
+        assert_eq!(
+            index.cursor(&nan, "asthma", &[]),
+            Err(CursorError::Malformed)
+        );
     }
 }

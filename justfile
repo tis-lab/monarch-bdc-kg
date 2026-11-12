@@ -161,12 +161,18 @@ search-index:
     #!/usr/bin/env bash
     set -euo pipefail
     uv run scripts/export_search.py {{db}} {{search_dir}}
-    rm -rf {{search_dir}}/index
+    # build beside the served index and swap it in only once it succeeds
+    rm -rf {{search_dir}}/index.new
     cargo run --release --manifest-path search/Cargo.toml -- index \
-        --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index
+        --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index.new
+    # after indexing, which needs an empty directory
     for f in concepts.jsonl concepts-meta.json; do
-        if [ -f {{search_dir}}/$f ]; then cp {{search_dir}}/$f {{search_dir}}/index/; fi
+        if [ -f {{search_dir}}/$f ]; then cp {{search_dir}}/$f {{search_dir}}/index.new/; fi
     done
+    rm -rf {{search_dir}}/index.old
+    if [ -d {{search_dir}}/index ]; then mv {{search_dir}}/index {{search_dir}}/index.old; fi
+    mv {{search_dir}}/index.new {{search_dir}}/index
+    rm -rf {{search_dir}}/index.old
 
 # Serve the index on localhost:8080 (/v3/api/autocomplete, /search, /entity/{id}, /bdc/...)
 search-serve:
@@ -193,5 +199,7 @@ clean:
 clean-base:
     rm -f data/base/monarch-kg.duckdb
 
+# Python/SQL tests (tests/) and the search service's tests
 test:
     uv run pytest tests -q
+    cargo test --release --manifest-path search/Cargo.toml

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tantivy::schema::{
     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, FAST, STORED, STRING,
 };
+use tantivy::{doc, TantivyDocument};
 
 use crate::analysis::{AUTOCOMPLETE, TEXT};
 
@@ -156,4 +157,41 @@ impl Fields {
             stored_entity: f("stored_entity")?,
         })
     }
+}
+
+/// One entity as an index document: each source column into its index fields (the table at
+/// the top of this file).
+pub fn to_document(f: &Fields, e: &Entity) -> anyhow::Result<TantivyDocument> {
+    let mut d = doc!(f.id => e.id.clone(), f.static_boost => e.static_boost);
+    let mut add = |fields: &[Field], value: &str| {
+        for &field in fields {
+            d.add_text(field, value);
+        }
+    };
+    if let Some(v) = &e.category {
+        add(&[f.category], v);
+    }
+    if let Some(v) = &e.name {
+        add(&[f.name, f.name_t, f.name_ac], v);
+    }
+    if let Some(v) = &e.symbol {
+        add(&[f.symbol, f.symbol_t, f.symbol_ac], v);
+    }
+    for v in e.synonym.iter().flatten() {
+        add(&[f.synonym, f.synonym_t, f.synonym_ac], v);
+    }
+    for v in e.exact_synonym.iter().flatten() {
+        add(&[f.exact_synonym], v);
+    }
+    if let Some(v) = &e.in_taxon_label {
+        add(&[f.in_taxon_label_t], v);
+    }
+    if let Some(v) = &e.description {
+        add(&[f.description_t], v);
+    }
+    for v in e.xref.iter().flatten() {
+        add(&[f.xref], v);
+    }
+    d.add_text(f.stored_entity, serde_json::to_string(e)?);
+    Ok(d)
 }

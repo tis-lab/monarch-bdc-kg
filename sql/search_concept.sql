@@ -48,11 +48,13 @@ sourced AS (
         regexp_extract(cs.source_file, '([^/]+)\.yaml$', 1) AS variable_name
     FROM classed k
     JOIN varlib.concept_source cs ON cs.concept_id = k.id
-    WHERE cs.source_file IS NOT NULL AND cs.cohort IS NOT NULL
+    -- a study can be listed without a spec file; it still counts toward studies
+    WHERE cs.cohort IS NOT NULL
 ),
 carriers AS (
     SELECT concept_key, variable_name, list(DISTINCT study ORDER BY study) AS studies
     FROM sourced
+    WHERE variable_name IS NOT NULL
     GROUP BY concept_key, variable_name
 ),
 kg AS (
@@ -63,6 +65,9 @@ kg AS (
         category
     FROM search_nodes
     WHERE position(':' IN id) > 0
+    -- one node per key, so label, id and category always come from the same node: a labelled
+    -- node first, then the lowest id
+    QUALIFY row_number() OVER (PARTITION BY concept_key ORDER BY nullif(trim(name), '') IS NULL, id) = 1
 )
 SELECT
     min(k.code) AS "conceptType",
@@ -74,7 +79,7 @@ SELECT
                   'sourceFile': s.source_file}
                  ORDER BY s.study, s.bdchm_class, s.concept_slot, s.source_file)
      FROM (SELECT DISTINCT study, bdchm_class, concept_slot, source_file
-           FROM sourced s WHERE s.concept_key = k.concept_key) s) AS "sourceMappings",
+           FROM sourced s WHERE s.concept_key = k.concept_key AND s.source_file IS NOT NULL) s) AS "sourceMappings",
     (SELECT count(DISTINCT study) FROM sourced s WHERE s.concept_key = k.concept_key) AS "studyCount",
     (SELECT list(DISTINCT study ORDER BY study) FROM sourced s WHERE s.concept_key = k.concept_key) AS "studies",
     (SELECT list({'variableName': v.variable_name, 'variableLabel': NULL::VARCHAR, 'studies': v.studies}

@@ -81,7 +81,7 @@ them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_view
 match Monarch's, the BDC data portal middleware can point its `MONARCH_BASE_URL` at it.
 
 `just search-index` exports the documents with `scripts/export_search.py`, which blanks
-restricted labels once for both exports (see [docs/adr](docs/adr)); terms are defined in
+restricted labels and text once for both exports (see [docs/adr](docs/adr)); terms are defined in
 [CONTEXT.md](CONTEXT.md).
 
 When the duckdb has the `varlib` schema, `just search-index` also writes the harmonized
@@ -108,8 +108,11 @@ just search-image   # linux/amd64 image; run with the index mounted at /index
 
 The query mirrors monarch-app's autocomplete: Monarch's query fields and boosts, every
 word required, and Monarch's category, deprecation and exact-synonym multipliers. Analyzers
-follow monarch-ingest's Solr field types. Labels from restricted sources (the SemMedDB
-snomedct tier) are blanked in `sql/search_entity.sql`, so the index never carries them.
+follow monarch-ingest's Solr field types. Labels and other text from restricted sources (the
+SemMedDB snomedct tier) are blanked by `scripts/export_search.py` before either export runs,
+so the index never carries them ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export.md)).
+
+Cursor pages report `offset: 0`: a cursor walk has no offset, so count pages client-side.
 
 ## Coverage dashboard
 
