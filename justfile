@@ -85,6 +85,70 @@ upload:
 
 all: download conform layer verify coverage
 
+# ── variable library (exploratory) ────────────────────────────────────────
+#
+# Loads the BDC variable library into the `varlib` schema of {{db}}, from teammate
+# tools pinned in varlib.yaml. See sql/varlib_schema.sql for the tables.
+
+varlib_dir := justfile_directory() / "data/varlib"
+
+# Check out each varlib.yaml repo at its pinned commit under data/varlib/src/
+varlib-sources:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{varlib_dir}}/src
+    uv run python -c 'import yaml; [print(n, r["url"], r["ref"], r["commit"]) for n, r in yaml.safe_load(open("varlib.yaml"))["repos"].items()]' |
+    while read -r name url ref commit; do
+        repo={{varlib_dir}}/src/$name
+        [ -d "$repo/.git" ] || git clone -q "$url" "$repo"
+        # fetch the pinned commit itself, so a force-pushed PR ref can't strand the pin
+        git -C "$repo" fetch -q origin "$commit" || git -C "$repo" fetch -q origin "$ref"
+        git -C "$repo" checkout -q "$commit"
+        echo "$name @ $commit"
+    done
+    cd {{varlib_dir}}/src/dm-bip && uv sync -q
+
+# Run dm-bip over the HV specs: mapping provenance for every cohort, and the
+# variable library for each cohort in varlib.yaml (fetches dbGaP dictionaries once,
+# then reads data/varlib/dbgap-cache); then build BDC-VarLib's concepts from the same specs
+varlib-extract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out={{varlib_dir}}/out
+    specs={{varlib_dir}}/src/NHLBI-BDC-DMC-HV/priority_variables_transform
+    mkdir -p "$out"
+    cd {{varlib_dir}}/src/dm-bip
+    uv run dm-bip extract-mapping-provenance "$specs" -o "$out/mapping-provenance.yaml"
+    uv run --project {{justfile_directory()}} python -c 'import yaml; [print(c["key"], c["spec_dir"]) for c in yaml.safe_load(open("{{justfile_directory()}}/varlib.yaml"))["cohorts"]]' |
+    while read -r key spec_dir; do
+        uv run dm-bip extract-variable-library "$specs/$spec_dir" --cohort "$key" \
+            --dbgap-cache {{varlib_dir}}/dbgap-cache -o "$out/$key-variable-library.yaml"
+    done
+    # Concepts: BDC-VarLib's own build, run against the pinned HV checkout so concepts and
+    # variables come from one commit, and named with the KG's labels rather than spec file names
+    cd {{justfile_directory()}}
+    uv run scripts/export_kg_labels.py {{db}} "$out/kg-labels.tsv"
+    rm -rf "$out/bdc-varlib"
+    cd {{varlib_dir}}/src/BDC-VarLib && uv sync -q && uv run python scripts/build_bdc_varlib.py \
+        --repo-dir {{varlib_dir}}/src/NHLBI-BDC-DMC-HV --labels "$out/kg-labels.tsv" --outdir "$out/bdc-varlib"
+
+# Load whatever varlib-extract produced (variables, provenance, concepts) into {{db}}
+varlib-load:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob  # inputs varlib-extract hasn't produced are skipped, not passed as literal globs
+    provenance=({{varlib_dir}}/out/mapping-provenance.yaml)
+    libraries=({{varlib_dir}}/out/*-variable-library.yaml)
+    uv run scripts/load_varlib.py {{db}} \
+        --mapping-provenance ${provenance[@]+"${provenance[@]}"} \
+        --variable-library ${libraries[@]+"${libraries[@]}"} \
+        --concepts-dir {{varlib_dir}}/out/bdc-varlib \
+        --variable-schema {{varlib_dir}}/src/bdc-variable-library/src/bdc_variable_library/schema/bdc_variable_library.yaml \
+        --source-repos {{varlib_dir}}/src/* \
+        --sssom $(uv run python -c 'import yaml; print(" ".join("{{varlib_dir}}/src/" + p for p in yaml.safe_load(open("varlib.yaml"))["sssom"]))')
+
+varlib: varlib-sources varlib-extract varlib-load
+
 # ── dashboard ─────────────────────────────────────────────────────────────
 
 dashboard-dev:

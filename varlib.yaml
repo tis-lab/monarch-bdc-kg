@@ -1,0 +1,54 @@
+# BDC variable library inputs, loaded into the `varlib` schema of the KG duckdb.
+#
+# Every input is a teammate's tool or output; this repo only loads and joins them.
+# `just varlib-sources` checks each repo out at its pin under data/varlib/src/.
+#
+# Unlike sources.yaml layers (dated KGX in the bucket), these are pinned by git commit
+# until the variable library publishes release artifacts of its own.
+
+repos:
+  dm-bip:
+    url: https://github.com/linkml/dm-bip.git
+    # linkml/dm-bip#376 (extract-variable-library), until it merges
+    ref: refs/pull/376/head
+    commit: 6245c9976ac58db0e9c4eaa835822d920221de03
+  NHLBI-BDC-DMC-HV:
+    url: https://github.com/RTIInternational/NHLBI-BDC-DMC-HV.git
+    ref: main
+    commit: 3260ff30824b78ea895a34b526e3ef1e8ee74035
+  BDC-VarLib:
+    url: https://github.com/tis-lab/BDC-VarLib.git
+    ref: main
+    commit: 0da1cf13e0d8095925e3e84825e296f52e636c80
+
+  bdc-variable-library:
+    url: https://github.com/linkml/bdc-variable-library.git
+    # the variable classes (IntegratedVariable / CompoundVariable subclasses), loaded as rows
+    ref: main
+    commit: d120020680096f584b242f8de7ac754b993b39f9
+
+  monarch-mapping-commons:
+    url: https://github.com/monarch-initiative/monarch-mapping-commons.git
+    # monarch-initiative/monarch-mapping-commons#86 (OMOP -> LOINC / SNOMED CT bridges), until it merges
+    ref: refs/pull/86/head
+    commit: 4514d7fdca3dca6a65ec2b7bd6fca324ed801c6d
+
+# SSSOM sets appended to main.mappings, so concept anchors the KG doesn't carry (OMOP) can
+# hop to ones it does. Paths are relative to data/varlib/src/.
+sssom:
+  - monarch-mapping-commons/mappings/omop2loinc.sssom.tsv
+  - monarch-mapping-commons/mappings/omop2snomed.sssom.tsv
+
+# Cohorts to run extract-variable-library for. Each needs a dbGaP cohort key that
+# `dm-bip fetch-digests --list` knows; specs come from
+# NHLBI-BDC-DMC-HV/priority_variables_transform/<spec_dir>.
+cohorts:
+  - key: aric
+    spec_dir: ARIC-ingest
+  - key: jhs
+    spec_dir: JHS-ingest
+
+# provided_by values whose node labels are restricted (licensed) and must not become concept
+# names; scripts/export_kg_labels.py leaves those nodes out of the labels file
+restricted_label_sources:
+  - procedure_to_disease_snomedct_nodes
