@@ -1,4 +1,4 @@
-//! BDC harmonized concepts: one per concept code, as `sql/search_concept.sql` exports them.
+//! BDC harmonized concepts: one per concept code, as sql/search_concept.sql exports them.
 //!
 //! Rows follow the harmonized index of tis-lab/bdc-dp-middleware (schemaVersion 2), so the
 //! middleware can load `/bdc/harmonized-index.json` in place of its bundled file, and the
@@ -12,14 +12,15 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// File names inside the index directory, written by `just search-index`.
+/// File names inside the index directory, written by scripts/export_search.py.
 pub const CONCEPTS_FILE: &str = "concepts.jsonl";
 pub const META_FILE: &str = "concepts-meta.json";
 
-/// The middleware drops prefix matches shorter than this, so "hyp" doesn't match everything.
+/// The middleware ignores prefix matches shorter than this, so "hyp" doesn't match everything.
 const MIN_PREFIX_LENGTH: usize = 5;
 pub const DEFAULT_MAX_MATCHES: usize = 25;
 
+/// One study's spec assigning the concept: the middleware's `SourceMapping`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceMapping {
@@ -29,58 +30,38 @@ pub struct SourceMapping {
     pub source_file: String,
 }
 
+/// A spec file (by name) that assigns the concept, and in which studies: the middleware's
+/// `BdcCarrier`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Carrier {
+pub struct ConceptVariable {
     pub variable_name: String,
     pub variable_label: Option<String>,
     pub studies: Vec<String>,
 }
 
+/// One harmonized concept. Field names on the wire are the middleware's (`conceptType`, ...).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Concept {
-    pub concept_type: String,
+    /// The concept code, e.g. MONDO:0005044.
+    #[serde(rename = "conceptType")]
+    pub curie: String,
     pub concept_label: Option<String>,
+    /// The label, else the CURIE (computed in the SQL): never null and never a file name.
+    #[serde(default)]
+    pub display_label: String,
     pub bdchm_type: Option<String>,
     pub bdchm_classes: Vec<String>,
     pub source_mappings: Vec<SourceMapping>,
     pub study_count: usize,
     pub studies: Vec<String>,
-    pub variables: Vec<Carrier>,
+    pub variables: Vec<ConceptVariable>,
     /// Additions the middleware's parser ignores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kg_node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kg_category: Option<String>,
-}
-
-impl Concept {
-    /// The label, else the CURIE: never null and never a spec file name.
-    pub fn display_label(&self) -> &str {
-        self.concept_label
-            .as_deref()
-            .filter(|l| !l.trim().is_empty())
-            .unwrap_or(&self.concept_type)
-    }
-}
-
-/// A concept as the API returns it: the index row plus its display label.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConceptView<'a> {
-    #[serde(flatten)]
-    pub concept: &'a Concept,
-    pub display_label: &'a str,
-}
-
-impl<'a> From<&'a Concept> for ConceptView<'a> {
-    fn from(concept: &'a Concept) -> Self {
-        ConceptView {
-            concept,
-            display_label: concept.display_label(),
-        }
-    }
 }
 
 /// What BDC has harmonized for one KG term: the middleware's `BdcCoverage`.
@@ -92,21 +73,31 @@ pub struct Coverage {
     pub variable_names: Vec<String>,
 }
 
+/// The HV commit and date the concepts were built from (concepts-meta.json).
 #[derive(Debug, Default, Deserialize)]
 struct Meta {
     revision: Option<String>,
     generated: Option<String>,
 }
 
-pub struct Concepts {
+/// Concepts matching a search: how many in all, and the first `limit` of them.
+pub struct ConceptMatches<'a> {
+    pub total: usize,
+    pub items: Vec<&'a Concept>,
+}
+
+pub struct HarmonizedConcepts {
     /// In the middleware's search order: most studies first, then by CURIE.
     concepts: Vec<Concept>,
-    tokens: Vec<HashSet<String>>,
+    /// Each concept's searchable words, parallel to `concepts`.
+    words: Vec<HashSet<String>>,
     by_key: HashMap<String, usize>,
-    meta: Meta,
+    /// `/bdc/harmonized-index.json`, built once since the concepts never change while served.
+    index_json: Vec<u8>,
 }
 
 /// The middleware's concept key: prefix upper-cased, local part as written.
+/// Keep in step with `concept_key` in sql/search_concept.sql.
 pub fn concept_key(curie: &str) -> String {
     match curie.split_once(':') {
         Some((prefix, local)) => format!("{}:{}", prefix.to_uppercase(), local),
@@ -114,36 +105,37 @@ pub fn concept_key(curie: &str) -> String {
     }
 }
 
+/// The middleware's CURIE pattern, `[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._-]+`.
+/// Keep in step with the WHERE clause in sql/search_concept.sql.
 fn is_curie(text: &str) -> bool {
     let Some((prefix, local)) = text.split_once(':') else {
         return false;
     };
-    let ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
-    prefix
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic())
-        && prefix.chars().all(ok)
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    prefix.starts_with(|c: char| c.is_ascii_alphabetic())
+        && prefix.chars().all(allowed)
         && !local.is_empty()
-        && local.chars().all(ok)
+        && local.chars().all(allowed)
 }
 
-fn tokenize(text: &str) -> BTreeSet<String> {
+/// Lower-cased words of two or more characters, as the middleware splits text.
+fn words(text: &str) -> BTreeSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.chars().count() > 1)
+        .filter(|w| w.chars().count() > 1)
         .map(str::to_string)
         .collect()
 }
 
-fn prefix_match(a: &str, b: &str) -> bool {
+/// The middleware's word match: equal, or one is a prefix of the other and 5+ characters long.
+fn word_matches(a: &str, b: &str) -> bool {
     let (shorter, longer) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    shorter.chars().count() >= MIN_PREFIX_LENGTH && longer.starts_with(shorter)
+    a == b || (shorter.chars().count() >= MIN_PREFIX_LENGTH && longer.starts_with(shorter))
 }
 
-impl Concepts {
-    /// Load concepts written beside the entity index, if any were.
-    pub fn open(dir: &Path) -> Result<Option<Concepts>> {
+impl HarmonizedConcepts {
+    /// Load the concepts written beside the entity index, if any were.
+    pub fn open(dir: &Path) -> Result<Option<HarmonizedConcepts>> {
         let path = dir.join(CONCEPTS_FILE);
         if !path.exists() {
             return Ok(None);
@@ -151,55 +143,52 @@ impl Concepts {
         let mut concepts = Vec::new();
         for (n, line) in BufReader::new(File::open(&path)?).lines().enumerate() {
             let line = line?;
-            if line.trim().is_empty() {
-                continue;
+            if !line.trim().is_empty() {
+                let concept = serde_json::from_str(&line)
+                    .with_context(|| format!("{} line {}", path.display(), n + 1))?;
+                concepts.push(concept);
             }
-            concepts.push(
-                serde_json::from_str::<Concept>(&line)
-                    .with_context(|| format!("{} line {}", path.display(), n + 1))?,
-            );
         }
-        let meta = match std::fs::read_to_string(dir.join(META_FILE)) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-            Err(_) => Meta::default(),
-        };
-        Ok(Some(Concepts::new(concepts, meta)))
+        let meta = read_meta(&dir.join(META_FILE));
+        Ok(Some(HarmonizedConcepts::new(concepts, meta)?))
     }
 
-    fn new(mut concepts: Vec<Concept>, meta: Meta) -> Concepts {
+    fn new(mut concepts: Vec<Concept>, meta: Meta) -> Result<HarmonizedConcepts> {
+        for c in &mut concepts {
+            if c.display_label.trim().is_empty() {
+                c.display_label = c.concept_label.clone().unwrap_or_else(|| c.curie.clone());
+            }
+        }
         concepts.sort_by(|a, b| {
             b.study_count
                 .cmp(&a.study_count)
-                .then_with(|| a.concept_type.cmp(&b.concept_type))
+                .then_with(|| a.curie.cmp(&b.curie))
         });
-        // The middleware searches variable names and labels; the KG label is added here.
-        let tokens = concepts
+        // The middleware searches spec file names and their labels; the KG label is added here.
+        let words = concepts
             .iter()
             .map(|c| {
-                let mut t: HashSet<String> = HashSet::new();
-                if let Some(label) = &c.concept_label {
-                    t.extend(tokenize(label));
-                }
+                let mut found = HashSet::new();
+                found.extend(c.concept_label.iter().flat_map(|l| words(l)));
                 for v in &c.variables {
-                    t.extend(tokenize(&v.variable_name));
-                    if let Some(label) = &v.variable_label {
-                        t.extend(tokenize(label));
-                    }
+                    found.extend(words(&v.variable_name));
+                    found.extend(v.variable_label.iter().flat_map(|l| words(l)));
                 }
-                t
+                found
             })
             .collect();
         let by_key = concepts
             .iter()
             .enumerate()
-            .map(|(i, c)| (concept_key(&c.concept_type), i))
+            .map(|(i, c)| (concept_key(&c.curie), i))
             .collect();
-        Concepts {
+        let index_json = serde_json::to_vec(&index_document(&concepts, &meta))?;
+        Ok(HarmonizedConcepts {
             concepts,
-            tokens,
+            words,
             by_key,
-            meta,
-        }
+            index_json,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -224,91 +213,107 @@ impl Concepts {
         })
     }
 
-    /// The middleware's search: a CURIE is an exact lookup; otherwise every query token must
-    /// equal, or share a prefix of 5+ characters with, some token of the concept.
-    pub fn search(&self, query: &str, max: usize) -> Vec<&Concept> {
+    /// The middleware's concept search: a CURIE is an exact lookup; otherwise every query word
+    /// must match some word of the concept (see `word_matches`). Most studies first.
+    pub fn search(&self, query: &str, limit: usize) -> ConceptMatches<'_> {
         let query = query.trim();
-        if query.is_empty() {
-            return Vec::new();
-        }
         if is_curie(query) {
-            return self.get(query).into_iter().collect();
+            let items: Vec<_> = self.get(query).into_iter().collect();
+            return ConceptMatches {
+                total: items.len(),
+                items,
+            };
         }
-        let wanted = tokenize(query);
+        let wanted = words(query);
         if wanted.is_empty() {
-            return Vec::new();
+            return ConceptMatches {
+                total: 0,
+                items: Vec::new(),
+            };
         }
-        self.concepts
+        let matching: Vec<&Concept> = self
+            .concepts
             .iter()
-            .zip(&self.tokens)
+            .zip(&self.words)
             .filter(|(_, have)| {
                 wanted
                     .iter()
-                    .all(|q| have.iter().any(|t| q == t || prefix_match(q, t)))
+                    .all(|q| have.iter().any(|w| word_matches(q, w)))
             })
             .map(|(c, _)| c)
-            .take(max)
-            .collect()
+            .collect();
+        ConceptMatches {
+            total: matching.len(),
+            items: matching.into_iter().take(limit).collect(),
+        }
     }
 
-    /// The whole set in the middleware's harmonized-index format.
-    pub fn index_document(&self) -> serde_json::Value {
-        let labelled = self
-            .concepts
-            .iter()
-            .filter(|c| c.concept_label.is_some())
-            .count();
-        let typed = self
-            .concepts
-            .iter()
-            .filter(|c| c.bdchm_type.is_some())
-            .count();
-        let studies: BTreeSet<&str> = self
-            .concepts
-            .iter()
-            .flat_map(|c| c.studies.iter().map(String::as_str))
-            .collect();
-        serde_json::json!({
-            "schemaVersion": 2,
-            "generated": self.meta.generated,
-            "source": {
-                "repository": "RTIInternational/NHLBI-BDC-DMC-HV",
-                "ingest": "priority_variables_transform/*-ingest/*.yaml",
-                "revision": self.meta.revision,
-                "builder": "tis-lab/BDC-VarLib scripts/build_bdc_varlib.py, loaded into the BDC KG duckdb (tis-lab/monarch-bdc-kg)",
-                "representation": "concept index served by bdc-search; conceptLabel is the KG label",
-            },
-            "counts": {
-                "studies": studies.len(),
-                "concepts": self.concepts.len(),
-                "conceptsWithALabel": labelled,
-                "conceptsWithABdchmType": typed,
-            },
-            "warnings": [],
-            "concepts": self.concepts.iter().map(ConceptView::from).collect::<Vec<_>>(),
-        })
+    /// The whole set in the middleware's harmonized-index format, as JSON bytes.
+    pub fn index_json(&self) -> &[u8] {
+        &self.index_json
     }
 }
 
+fn read_meta(path: &Path) -> Meta {
+    let parsed = std::fs::read_to_string(path)
+        .map_err(anyhow::Error::from)
+        .and_then(|text| Ok(serde_json::from_str::<Meta>(&text)?));
+    match parsed {
+        Ok(meta) => meta,
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "no concept metadata; harmonized-index.json will have no revision");
+            Meta::default()
+        }
+    }
+}
+
+fn index_document(concepts: &[Concept], meta: &Meta) -> serde_json::Value {
+    let studies: BTreeSet<&str> = concepts
+        .iter()
+        .flat_map(|c| c.studies.iter().map(String::as_str))
+        .collect();
+    serde_json::json!({
+        "schemaVersion": 2,
+        "generated": meta.generated,
+        "source": {
+            "repository": "RTIInternational/NHLBI-BDC-DMC-HV",
+            "ingest": "priority_variables_transform/*-ingest/*.yaml",
+            "revision": meta.revision,
+            "builder": "tis-lab/BDC-VarLib scripts/build_bdc_varlib.py, loaded into the BDC KG duckdb (tis-lab/monarch-bdc-kg)",
+            "representation": "concept index served by bdc-search; conceptLabel is the KG label",
+        },
+        "counts": {
+            "studies": studies.len(),
+            "concepts": concepts.len(),
+            "conceptsWithALabel": concepts.iter().filter(|c| c.concept_label.is_some()).count(),
+            "conceptsWithABdchmType": concepts.iter().filter(|c| c.bdchm_type.is_some()).count(),
+        },
+        "warnings": [],
+        "concepts": concepts,
+    })
+}
+
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
-    fn concept(curie: &str, label: Option<&str>, studies: &[&str], vars: &[&str]) -> Concept {
+    pub fn concept(curie: &str, label: Option<&str>, studies: &[&str], files: &[&str]) -> Concept {
+        let studies: Vec<String> = studies.iter().map(|s| s.to_string()).collect();
         Concept {
-            concept_type: curie.into(),
+            curie: curie.into(),
             concept_label: label.map(Into::into),
+            display_label: String::new(),
             bdchm_type: Some("condition".into()),
             bdchm_classes: vec!["Condition".into()],
             source_mappings: vec![],
             study_count: studies.len(),
-            studies: studies.iter().map(|s| s.to_string()).collect(),
-            variables: vars
+            studies: studies.clone(),
+            variables: files
                 .iter()
-                .map(|v| Carrier {
-                    variable_name: v.to_string(),
+                .map(|f| ConceptVariable {
+                    variable_name: f.to_string(),
                     variable_label: None,
-                    studies: studies.iter().map(|s| s.to_string()).collect(),
+                    studies: studies.clone(),
                 })
                 .collect(),
             kg_node_id: None,
@@ -316,8 +321,8 @@ mod tests {
         }
     }
 
-    fn sample() -> Concepts {
-        Concepts::new(
+    pub fn sample() -> HarmonizedConcepts {
+        HarmonizedConcepts::new(
             vec![
                 concept(
                     "MONDO:0005149",
@@ -335,47 +340,61 @@ mod tests {
             ],
             Meta::default(),
         )
+        .unwrap()
+    }
+
+    fn curies(m: &ConceptMatches) -> Vec<String> {
+        m.items.iter().map(|c| c.curie.clone()).collect()
     }
 
     #[test]
-    fn orders_by_study_count() {
+    fn orders_by_study_count_then_curie() {
         let concepts = sample();
-        let found = concepts.search("hypertension", 25);
-        let ids: Vec<_> = found.iter().map(|c| c.concept_type.as_str()).collect();
-        // ties in study count fall back to CURIE order, as in the middleware
-        assert_eq!(ids, ["MONDO:0005044", "HP:0000822", "MONDO:0005149"]);
+        assert_eq!(
+            curies(&concepts.search("hypertension", 25)),
+            ["MONDO:0005044", "HP:0000822", "MONDO:0005149"]
+        );
+    }
+
+    #[test]
+    fn total_counts_all_matches_not_the_page() {
+        let concepts = sample();
+        let page = concepts.search("hypertension", 1);
+        assert_eq!((page.total, page.items.len()), (3, 1));
     }
 
     #[test]
     fn short_prefixes_do_not_match() {
-        assert!(sample().search("hyp", 25).is_empty());
-        assert_eq!(sample().search("hypert", 25).len(), 3);
+        assert_eq!(sample().search("hyp", 25).total, 0);
+        assert_eq!(sample().search("hypert", 25).total, 3);
     }
 
     #[test]
     fn labels_are_searchable() {
-        let ids: Vec<_> = sample()
-            .search("pulmonary", 25)
-            .iter()
-            .map(|c| c.concept_type.clone())
-            .collect();
-        assert_eq!(ids, ["MONDO:0005149"]);
+        assert_eq!(curies(&sample().search("pulmonary", 25)), ["MONDO:0005149"]);
     }
 
     #[test]
     fn curies_look_up_case_insensitively_by_prefix() {
         let concepts = sample();
-        assert_eq!(concepts.search("mondo:0005044", 25).len(), 1);
+        assert_eq!(concepts.search("mondo:0005044", 25).total, 1);
         assert_eq!(concepts.coverage("MONDO:0005044").unwrap().study_count, 2);
         assert!(concepts.coverage("MONDO:9999999").is_none());
     }
 
     #[test]
     fn display_label_falls_back_to_curie() {
-        let concepts = sample();
         assert_eq!(
-            concepts.get("HP:0000822").unwrap().display_label(),
+            sample().get("HP:0000822").unwrap().display_label,
             "HP:0000822"
         );
+    }
+
+    #[test]
+    fn index_json_uses_the_middleware_field_names() {
+        let doc: serde_json::Value = serde_json::from_slice(sample().index_json()).unwrap();
+        assert_eq!(doc["schemaVersion"], 2);
+        assert_eq!(doc["concepts"][0]["conceptType"], "MONDO:0005044");
+        assert_eq!(doc["concepts"][0]["displayLabel"], "hypertensive disorder");
     }
 }

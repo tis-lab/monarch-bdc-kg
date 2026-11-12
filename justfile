@@ -155,27 +155,18 @@ varlib: varlib-sources varlib-extract varlib-load
 
 search_dir := "data/search"
 
-# Export one search document per node (sql/search_entity.sql) and build the index; when {{db}}
-# has the varlib schema, also write the harmonized concepts (sql/search_concept.sql) beside it
+# Export search documents from {{db}} (scripts/export_search.py: one per KG node, plus the
+# harmonized concepts when {{db}} has the varlib schema) and build the index beside them
 search-index:
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p {{search_dir}}
-    export_json() {
-        uv run python -c 'import duckdb, sys; duckdb.connect(sys.argv[1], read_only=True).execute(f"COPY ({open(sys.argv[2]).read()}) TO \x27{sys.argv[3]}\x27 (FORMAT json)")' "$@"
-    }
-    export_json {{db}} sql/search_entity.sql {{search_dir}}/entities.jsonl
+    uv run scripts/export_search.py {{db}} {{search_dir}}
     rm -rf {{search_dir}}/index
     cargo run --release --manifest-path search/Cargo.toml -- index \
         --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index
-    if uv run python -c 'import duckdb, sys; sys.exit(0 if duckdb.connect(sys.argv[1], read_only=True).execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = \x27varlib\x27").fetchone()[0] else 1)' {{db}}; then
-        export_json {{db}} sql/search_concept.sql {{search_dir}}/index/concepts.jsonl
-        uv run python -c 'import duckdb, json, sys; c = duckdb.connect(sys.argv[1], read_only=True); r = c.execute("SELECT commit, strftime(max(loaded_at), \x27%Y-%m-%d\x27) FROM varlib.load_manifest WHERE input = \x27source_repo\x27 AND repo = \x27NHLBI-BDC-DMC-HV\x27 GROUP BY commit").fetchone() or (None, None); json.dump({"revision": r[0], "generated": r[1]}, open(sys.argv[2], "w"))' \
-            {{db}} {{search_dir}}/index/concepts-meta.json
-        echo "concepts: $(wc -l < {{search_dir}}/index/concepts.jsonl)"
-    else
-        echo "{{db}} has no varlib schema; skipping harmonized concepts (just varlib)"
-    fi
+    for f in concepts.jsonl concepts-meta.json; do
+        if [ -f {{search_dir}}/$f ]; then cp {{search_dir}}/$f {{search_dir}}/index/; fi
+    done
 
 # Serve the index on localhost:8080 (/v3/api/autocomplete, /search, /entity/{id}, /bdc/...)
 search-serve:

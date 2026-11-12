@@ -4,8 +4,11 @@
 -- one entry per CURIE across BDCHM classes, studies that assign it, and the spec files
 -- (variableName) that carry it. kgNodeId and kgCategory are additions it ignores.
 --
--- conceptLabel is the KG's label for the code. Labels from restricted sources are left out,
--- as in sql/search_entity.sql.
+-- conceptLabel is the KG's label for the code, read from `search_nodes` (defined by
+-- scripts/export_search.py) so restricted labels are blank while the KG link is kept.
+-- displayLabel is the label, else the CURIE: never null and never a spec file name.
+--
+-- The concept key (prefix upper-cased) and the CURIE pattern must match search/src/concepts.rs.
 WITH classed AS (
     SELECT
         c.id,
@@ -52,15 +55,19 @@ carriers AS (
     FROM sourced
     GROUP BY concept_key, variable_name
 ),
-labels AS (
-    SELECT id, name, category
-    FROM nodes
-    WHERE trim(coalesce(name, '')) <> ''
-      AND coalesce(provided_by, '') NOT IN ('procedure_to_disease_snomedct_nodes')
+kg AS (
+    SELECT
+        upper(split_part(id, ':', 1)) || substr(id, position(':' IN id)) AS concept_key,
+        id,
+        nullif(trim(name), '') AS name,
+        category
+    FROM search_nodes
+    WHERE position(':' IN id) > 0
 )
 SELECT
     min(k.code) AS "conceptType",
     any_value(l.name) AS "conceptLabel",
+    coalesce(any_value(l.name), min(k.code)) AS "displayLabel",
     CASE WHEN count(DISTINCT k.bdchm_type) = 1 THEN any_value(k.bdchm_type) END AS "bdchmType",
     list(DISTINCT k.bdchm_class ORDER BY k.bdchm_class) AS "bdchmClasses",
     (SELECT list({'study': s.study, 'bdchmClass': s.bdchm_class, 'conceptSlot': s.concept_slot,
@@ -76,7 +83,7 @@ SELECT
     any_value(l.id) AS "kgNodeId",
     any_value(l.category) AS "kgCategory"
 FROM classed k
-LEFT JOIN labels l ON l.id = k.code
+LEFT JOIN kg l ON l.concept_key = k.concept_key
 GROUP BY k.concept_key
 HAVING "studyCount" > 0
 ORDER BY "conceptType"

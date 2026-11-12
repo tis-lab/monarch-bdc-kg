@@ -1,5 +1,14 @@
-//! The entity index: Monarch's Solr entity core fields, plus a stored copy of each document
-//! in Monarch's response shape and a precomputed boost prior.
+//! The entity index: Monarch's Solr entity core fields, plus a stored copy of each document in
+//! Monarch's response shape and its static boost.
+//!
+//! Like Monarch's Solr copyFields, one source column feeds several index fields, one per way of
+//! matching it:
+//!
+//!   name, symbol, synonym   ->  <col> (exact), <col>_t (text), <col>_ac (prefix)
+//!   in_taxon_label, description  ->  <col>_t (text)
+//!   id, category, exact_synonym, xref  ->  <col> (exact)
+//!
+//! The query side of that table, with the boosts, is monarch::QUERY_FIELDS.
 
 use serde::{Deserialize, Serialize};
 use tantivy::schema::{
@@ -8,7 +17,7 @@ use tantivy::schema::{
 
 use crate::analysis::{AUTOCOMPLETE, TEXT};
 
-/// One KG node, as `sql/search_entity.sql` exports it and as `/autocomplete` returns it.
+/// One KG node, as sql/search_entity.sql exports it and as `/autocomplete` returns it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entity {
     pub id: String,
@@ -34,36 +43,28 @@ pub struct Entity {
     pub namespace: Option<String>,
     #[serde(rename = "type")]
     pub type_: Option<String>,
+    /// Monarch's node-level boosts, computed in sql/search_entity.sql. Read on export, kept in
+    /// the index as a fast field, never returned.
+    #[serde(default = "no_boost", skip_serializing)]
+    pub static_boost: f64,
 }
 
-impl Entity {
-    /// Monarch's static boosts from `entity_boost`: category, human gene, deprecation.
-    /// Query-dependent boosts (exact synonym, blank search) are applied at query time.
-    pub fn prior(&self) -> f64 {
-        let mut prior = match self.category.as_deref() {
-            Some("biolink:PhenotypicFeature") => 1.1,
-            Some("biolink:Disease") => 1.3,
-            Some("biolink:Gene") if self.in_taxon.as_deref() == Some("NCBITaxon:9606") => 1.1,
-            _ => 1.0,
-        };
-        if self.deprecated == Some(true) {
-            prior *= 0.1;
-        }
-        prior
-    }
+fn no_boost() -> f64 {
+    1.0
 }
 
-/// How a query term is matched against a field, mirroring the Solr field types.
+/// How a query word is matched against a field, mirroring Monarch's Solr field types.
 #[derive(Debug, Clone, Copy)]
-pub enum Kind {
+pub enum SolrFieldType {
     /// Solr `string`: the whole value is one case-sensitive term.
-    Raw,
-    /// Solr `text` (`*_t`).
+    Exact,
+    /// Solr `text` (`*_t`): words, folded, lower-cased, plurals stripped.
     Text,
-    /// Solr `autocomplete` (`*_ac`).
+    /// Solr `autocomplete` (`*_ac`): word prefixes.
     Autocomplete,
 }
 
+/// Handles to the index's fields, looked up by name once when the index is opened.
 #[derive(Clone)]
 pub struct Fields {
     pub id: Field,
@@ -81,31 +82,12 @@ pub struct Fields {
     pub in_taxon_label_t: Field,
     pub description_t: Field,
     pub xref: Field,
-    pub prior: Field,
-    pub doc: Field,
+    pub static_boost: Field,
+    /// The whole entity as JSON, returned as is.
+    pub stored_entity: Field,
 }
 
-impl Fields {
-    /// Monarch's `entity_query_fields()`, which autocomplete uses: the autocomplete fields
-    /// plus description_t and xref.
-    pub fn query_fields(&self) -> Vec<(Field, Kind, f32)> {
-        vec![
-            (self.id, Kind::Raw, 100.0),
-            (self.name, Kind::Raw, 10.0),
-            (self.name_t, Kind::Text, 5.0),
-            (self.name_ac, Kind::Autocomplete, 1.0),
-            (self.symbol, Kind::Raw, 10.0),
-            (self.symbol_t, Kind::Text, 5.0),
-            (self.symbol_ac, Kind::Autocomplete, 1.0),
-            (self.synonym, Kind::Raw, 1.0),
-            (self.synonym_t, Kind::Text, 1.0),
-            (self.synonym_ac, Kind::Autocomplete, 1.0),
-            (self.in_taxon_label_t, Kind::Text, 1.0),
-            (self.description_t, Kind::Text, 1.0),
-            (self.xref, Kind::Raw, 1.0),
-        ]
-    }
-}
+pub const STATIC_BOOST: &str = "static_boost";
 
 pub fn build() -> Schema {
     let mut builder = Schema::builder();
@@ -118,9 +100,9 @@ pub fn build() -> Schema {
         TextFieldIndexing::default()
             .set_tokenizer(AUTOCOMPLETE)
             .set_index_option(IndexRecordOption::WithFreqs)
-            // tantivy counts every gram toward field length, where Lucene's discountOverlaps
-            // counts only word positions; without norms, long names and synonym lists aren't
-            // penalized for their grams.
+            // tantivy counts every prefix toward a field's length, where Lucene's
+            // discountOverlaps counts only word positions; without norms, long names and
+            // synonym lists aren't penalized for their prefixes.
             .set_fieldnorms(false),
     );
     for name in [
@@ -146,8 +128,8 @@ pub fn build() -> Schema {
     for name in ["name_ac", "symbol_ac", "synonym_ac"] {
         builder.add_text_field(name, autocomplete.clone());
     }
-    builder.add_f64_field("prior", FAST);
-    builder.add_text_field("doc", STORED);
+    builder.add_f64_field(STATIC_BOOST, FAST);
+    builder.add_text_field("stored_entity", STORED);
     builder.build()
 }
 
@@ -170,8 +152,8 @@ impl Fields {
             in_taxon_label_t: f("in_taxon_label_t")?,
             description_t: f("description_t")?,
             xref: f("xref")?,
-            prior: f("prior")?,
-            doc: f("doc")?,
+            static_boost: f(STATIC_BOOST)?,
+            stored_entity: f("stored_entity")?,
         })
     }
 }

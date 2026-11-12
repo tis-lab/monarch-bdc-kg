@@ -1,6 +1,11 @@
 //! Analyzers matching the field types in monarch-ingest's Solr configuration
 //! (scripts/autocomplete-fieldtype.json, scripts/text-fieldtype.json).
 //!
+//! Reading guide: most of this file is tantivy's plumbing for plugging a filter into its
+//! analyzer chain (the TokenFilter / Tokenizer / TokenStream impls). The behaviour is in two
+//! places: `EdgeNgramStream::advance` (word prefixes, for autocomplete) and `minimal_stem`
+//! (plural stripping, for text). Neither exists in tantivy in the form Monarch's Solr uses.
+//!
 //! Solr's StandardTokenizer is approximated by tantivy's SimpleTokenizer, which splits on
 //! non-alphanumeric characters; the two differ on apostrophes and some punctuation, which is
 //! close to what the text type's WordDelimiterGraphFilter produces anyway.
