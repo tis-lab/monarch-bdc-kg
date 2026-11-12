@@ -8,6 +8,7 @@ dependencies = [
     "koza>=2.6.2",
     "duckdb>=1.1",
     "pyyaml>=6.0",
+    "linkml-runtime>=1.9",
 ]
 
 [dependency-groups]

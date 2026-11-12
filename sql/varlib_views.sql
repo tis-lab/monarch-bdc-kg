@@ -1,13 +1,14 @@
 -- Views that integrate the varlib tables with each other and with the KG.
 -- Recreated by scripts/load_varlib.py after every load.
 
--- Which concept each source variable feeds. BDC-VarLib lists phvs where a spec names them;
--- the rest are resolved through mapping provenance: a derivation of the same spec file, BDCHM
+-- Which concept each source variable feeds. BDC-VarLib lists phvs where a spec names them, and
+-- those are used as listed; concepts it lists none for are resolved through mapping provenance: a derivation of the same spec file, BDCHM
 -- class and dataset as the concept read them. Measurements nested in a
 -- MeasurementObservationSet count as MeasurementObservation, as BDC-VarLib files them. Join
 -- keys (participant ids read only inside an expr) are excluded: they feed every concept in
 -- their table without measuring any.
 CREATE OR REPLACE VIEW varlib.variable_concept AS
+WITH declaring AS (SELECT DISTINCT concept_id FROM varlib.concept_variable_declared)
 SELECT DISTINCT ds.phv, cs.concept_id, 'mapping_provenance' AS via
 FROM varlib.derivation_source ds
 JOIN varlib.derivation d ON d.id = ds.derivation_id
@@ -17,12 +18,16 @@ JOIN varlib.concept c ON c.id = cs.concept_id
       OR (c.bdchm_class = 'MeasurementObservation' AND d.bdchm_class = 'MeasurementObservationSet'))
 JOIN varlib.concept_dataset cd ON cd.concept_id = c.id AND cd.pht = d.pht
 WHERE NOT coalesce(ds.via_expression, false)
+  -- a concept that lists its phvs is taken at its word: one spec block can derive several
+  -- concepts from one table (a case() over drug codes), and provenance alone would attach
+  -- every phv the block reads to all of them
+  AND c.id NOT IN (SELECT concept_id FROM declaring)
 UNION
 SELECT phv, concept_id, 'declared' AS via
 FROM varlib.concept_variable_declared;
 
 -- Concept ontology anchors, resolved against KG nodes. A curie the KG doesn't carry (OMOP,
--- ATC, RxCUI) gets one skos:exactMatch hop through main.mappings, e.g. OMOP:3006315 ->
+-- ATC, RxCUI) gets one skos:exactMatch hop through the KG's mappings or the varlib bridges, e.g. OMOP:3006315 ->
 -- LOINC:26444-0 via the monarch-mapping-commons OMOP bridges. `via` records which.
 CREATE OR REPLACE VIEW varlib.concept_anchor AS
 WITH candidates AS (
@@ -33,7 +38,9 @@ WITH candidates AS (
            CASE WHEN x.subject_id = m.object_id THEN x.object_id ELSE x.subject_id END,
            x.mapping_source
     FROM varlib.concept_mapping m
-    JOIN main.mappings x
+    JOIN (SELECT subject_id, predicate_id, object_id, mapping_source FROM main.mappings
+          UNION ALL
+          SELECT subject_id, predicate_id, object_id, mapping_source FROM varlib.bridge_mapping) x
       ON x.predicate_id = 'skos:exactMatch'
      AND m.object_id IN (x.subject_id, x.object_id)
 )
@@ -194,8 +201,10 @@ WHERE syn IS NOT NULL;
 
 -- Words with their document frequency across lexicon targets: the first cut at an FST's
 -- (key, weight) pairs. Lowercased, split on anything non-alphanumeric; single characters
--- and English stopwords dropped. Natural-language terms only: concept slot names (hist_hrtdis)
--- and dbGaP VARNAMEs (HYPERT01) are codes, and their fragments would pollute word completion.
+-- and English stopwords dropped. concept_name rows are left out: a concept's name is either its
+-- KG label, already present as an anchor_label row, or a fallback to spec file names
+-- (hist_hrtdis); variable_name rows are dbGaP VARNAMEs (HYPERT01). Both are codes whose
+-- fragments would pollute word completion.
 CREATE OR REPLACE VIEW varlib.lexicon_word AS
 WITH words AS (
     SELECT l.target_kind, l.target_id, l.term_kind, l.weight, w AS word
@@ -214,3 +223,14 @@ SELECT
     list(DISTINCT term_kind ORDER BY term_kind) AS term_kinds
 FROM words
 GROUP BY word;
+
+-- bdc-variable-library variables to harmonized concepts, by the concept code the variable's
+-- microschema record fixes (prefix compared case-insensitively). Integrated variables carry no
+-- code in the schema yet, so only compound variables with a condition, drug or procedure code
+-- link here.
+CREATE OR REPLACE VIEW varlib.library_variable_concept AS
+SELECT DISTINCT lc.variable_id, c.id AS concept_id, lc.code
+FROM varlib.library_variable_code lc
+JOIN varlib.concept c
+  ON upper(split_part(c.code, ':', 1)) || substr(c.code, position(':' IN c.code))
+   = upper(split_part(lc.code, ':', 1)) || substr(lc.code, position(':' IN lc.code));

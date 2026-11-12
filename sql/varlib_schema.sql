@@ -1,11 +1,12 @@
 -- BDC variable library tables, loaded into the KG duckdb under the `varlib` schema.
 --
--- Three inputs, each a teammate's tool or output (pins in varlib.yaml):
+-- Four inputs, each a teammate's tool or output (pins in varlib.yaml):
 --   variable library   dm-bip `extract-variable-library` (linkml/dm-bip#376): per-phv
 --                      SingleContinuousVariable / SingleCategoricalVariable entries of
 --                      linkml/bdc-variable-library
 --   mapping provenance dm-bip `extract-mapping-provenance`: which phvs each HV trans-spec reads
 --   concepts           tis-lab/BDC-VarLib's build over the same specs: one slot per concept code
+--   library variables  linkml/bdc-variable-library's variable classes, read with SchemaView
 --
 -- Nothing here lives in nodes/edges, so the KGX export, verify and coverage are unaffected.
 -- Participant-level data (dm-bip mapped-data/) never enters these tables.
@@ -135,3 +136,31 @@ CREATE OR REPLACE TABLE varlib.enum_value (
     meaning      VARCHAR,
     description  VARCHAR
 );
+
+-- The variable classes of linkml/bdc-variable-library, one row each. The schema models every
+-- harmonized variable as its own class (IntegratedHeight001, CompoundAlbuminUrine001, ...);
+-- here each is a row, read with SchemaView so the microschema record it instantiates is
+-- resolved through inheritance. Instances (concept_type, integrates) aren't published yet.
+
+CREATE OR REPLACE TABLE varlib.library_variable (
+    id                  VARCHAR PRIMARY KEY,  -- class name, e.g. CompoundAlbuminUrine001
+    kind                VARCHAR NOT NULL,     -- IntegratedVariable | CompoundVariable
+    is_a                VARCHAR,
+    description         VARCHAR,
+    records             VARCHAR[],            -- microschema record classes it instantiates
+    record_description  VARCHAR,
+    unit                VARCHAR,              -- from the record's slot_usage, e.g. mg/dL
+    method              VARCHAR               -- e.g. immunoturbidometry
+);
+
+-- Concept codes a variable's record fixes: equals_string values of its *_type slots.
+CREATE OR REPLACE TABLE varlib.library_variable_code (
+    variable_id  VARCHAR NOT NULL,
+    slot         VARCHAR NOT NULL,            -- condition_type, drug_type, procedure_type, ...
+    code         VARCHAR NOT NULL             -- OMOP:321318, ATC:B01AC06, ...
+);
+
+-- SSSOM bridges for concept codes the KG doesn't carry (e.g. OMOP -> LOINC / SNOMED CT from
+-- monarch-mapping-commons#86). Same columns as main.mappings, kept here so loading the
+-- variable library never modifies the KG's own tables.
+CREATE OR REPLACE TABLE varlib.bridge_mapping AS SELECT * FROM main.mappings LIMIT 0;

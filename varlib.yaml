@@ -21,6 +21,12 @@ repos:
     ref: main
     commit: 0da1cf13e0d8095925e3e84825e296f52e636c80
 
+  bdc-variable-library:
+    url: https://github.com/linkml/bdc-variable-library.git
+    # the variable classes (IntegratedVariable / CompoundVariable subclasses), loaded as rows
+    ref: main
+    commit: d120020680096f584b242f8de7ac754b993b39f9
+
   monarch-mapping-commons:
     url: https://github.com/monarch-initiative/monarch-mapping-commons.git
     # monarch-initiative/monarch-mapping-commons#86 (OMOP -> LOINC / SNOMED CT bridges), until it merges
@@ -41,3 +47,8 @@ cohorts:
     spec_dir: ARIC-ingest
   - key: jhs
     spec_dir: JHS-ingest
+
+# provided_by values whose node labels are restricted (licensed) and must not become concept
+# names; scripts/export_kg_labels.py leaves those nodes out of the labels file
+restricted_label_sources:
+  - procedure_to_disease_snomedct_nodes
