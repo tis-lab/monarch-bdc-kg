@@ -27,9 +27,23 @@ use crate::monarch;
 pub struct App {
     pub entities: Arc<EntityIndex>,
     pub concepts: Option<Arc<HarmonizedConcepts>>,
+    /// The release manifest packaged with the index (`manifest.json`), when there is one.
+    pub release: Option<Arc<serde_json::Value>>,
 }
 
 impl App {
+    /// What this server is serving: `/version`, and `bdc-search info`.
+    pub fn info(&self) -> serde_json::Value {
+        json!({
+            "bdc_search": env!("CARGO_PKG_VERSION"),
+            "schema_version": crate::schema::SCHEMA_VERSION,
+            "index_version": self.entities.version(),
+            "entities": self.entities.num_docs(),
+            "concepts": self.concepts.as_ref().map(|c| c.len()),
+            "release": self.release.as_deref(),
+        })
+    }
+
     /// Add BDC coverage to each hit that is a harmonized concept.
     pub fn with_coverage(&self, mut results: SearchResults) -> SearchResults {
         if let Some(concepts) = &self.concepts {
@@ -52,6 +66,10 @@ pub fn router(app: App) -> Router {
         // The indexes open before the listener binds, so serving at all means ready.
         .route("/health/live", get(|| async { "ok" }))
         .route("/health/ready", get(|| async { "ok" }))
+        .route(
+            "/version",
+            get(|State(app): State<App>| async move { Json(app.info()) }),
+        )
         .with_state(app)
 }
 
@@ -388,6 +406,7 @@ mod tests {
         App {
             entities: Arc::new(index_of(entities)),
             concepts: Some(Arc::new(sample())),
+            release: None,
         }
     }
 
