@@ -1,8 +1,8 @@
 {
- "generated": "2026-08-24",
+ "generated": "2026-11-13",
  "database": "output/bdc-kg.duckdb",
- "nodes": 1669609,
- "edges": 16095490,
+ "nodes": 2009336,
+ "edges": 16987981,
  "provided_by": [
   "alliance_allele_edges",
   "alliance_disease_edges",
@@ -19,15 +19,16 @@
   "go_annotation_edges",
   "hpoa_disease_mode_of_inheritance_edges",
   "hpoa_disease_to_phenotype_edges",
-  "hpoa_gene_to_disease_edges",
   "hpoa_gene_to_phenotype_edges",
   "loinc_composition_edges",
   "loinc_hierarchy_edges",
   "loinc_phenotype_edges",
+  "medic_edges",
   "mmrrc_allele_to_genotype_edges",
   "mmrrc_genotype_to_gene_edges",
   "mmrrc_genotype_to_phenotype_edges",
   "omim_gene_to_disease_edges",
+  "orphanet_gene_to_disease_edges",
   "panther_genome_orthologs_edges",
   "phenio_edges",
   "phenopacket_ingest_edges",
@@ -55,20 +56,20 @@
   "Procedure",
   "Imaging / Waveform"
  ],
- "targets_met": 2,
- "targets_gap": 4,
- "edges_outside_rubric_both_endpoints": 194447,
+ "targets_met": 3,
+ "targets_gap": 1,
+ "edges_outside_rubric_both_endpoints": 194565,
  "pairs": [
   {
    "subject_type": "Disease",
    "object_type": "Disease",
-   "total": 47877,
+   "total": 48206,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "subclass_of",
-     "count": 46657,
+     "count": 46985,
      "sources": [
       "mondo",
       "mpath"
@@ -76,7 +77,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 1113,
+     "count": 1114,
      "sources": [
       "mondo"
      ]
@@ -107,13 +108,13 @@
   {
    "subject_type": "Disease",
    "object_type": "Phenotype",
-   "total": 276826,
+   "total": 277687,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "has_phenotype",
-     "count": 267798,
+     "count": 268741,
      "sources": [
       "mondo",
       "omim",
@@ -122,7 +123,7 @@
     },
     {
      "predicate": "has_mode_of_inheritance",
-     "count": 9022,
+     "count": 8940,
      "sources": [
       "hpo-annotations"
      ]
@@ -135,14 +136,14 @@
      ]
     },
     {
-     "predicate": "has_participant",
+     "predicate": "related_to",
      "count": 1,
      "sources": [
       "mondo"
      ]
     },
     {
-     "predicate": "related_to",
+     "predicate": "has_participant",
      "count": 1,
      "sources": [
       "mondo"
@@ -153,13 +154,13 @@
   {
    "subject_type": "Disease",
    "object_type": "Gene / Variant",
-   "total": 6999,
+   "total": 7020,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 6984,
+     "count": 7005,
      "sources": [
       "mondo"
      ]
@@ -179,14 +180,14 @@
      ]
     },
     {
-     "predicate": "disrupts",
+     "predicate": "caused_by",
      "count": 1,
      "sources": [
       "mondo"
      ]
     },
     {
-     "predicate": "caused_by",
+     "predicate": "disrupts",
      "count": 1,
      "sources": [
       "mondo"
@@ -288,13 +289,13 @@
   {
    "subject_type": "Disease",
    "object_type": "(other)",
-   "total": 3549,
+   "total": 3550,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "in_taxon",
-     "count": 2246,
+     "count": 2247,
      "sources": [
       "mondo"
      ]
@@ -346,13 +347,13 @@
   {
    "subject_type": "Phenotype",
    "object_type": "Disease",
-   "total": 845,
+   "total": 907,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 757,
+     "count": 819,
      "sources": [
       "upheno"
      ]
@@ -376,13 +377,13 @@
   {
    "subject_type": "Phenotype",
    "object_type": "Phenotype",
-   "total": 292563,
+   "total": 299469,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "subclass_of",
-     "count": 278787,
+     "count": 285567,
      "sources": [
       "ddpheno",
       "fypo",
@@ -404,14 +405,14 @@
     },
     {
      "predicate": "same_as",
-     "count": 4734,
+     "count": 4864,
      "sources": [
       "upheno"
      ]
     },
     {
      "predicate": "related_to",
-     "count": 628,
+     "count": 627,
      "sources": [
       "fypo",
       "nbo",
@@ -434,7 +435,7 @@
     },
     {
      "predicate": "part_of",
-     "count": 28,
+     "count": 25,
      "sources": [
       "fypo",
       "nbo"
@@ -460,13 +461,13 @@
   {
    "subject_type": "Phenotype",
    "object_type": "Drug",
-   "total": 5200,
+   "total": 5798,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 4524,
+     "count": 5122,
      "sources": [
       "fypo",
       "nbo",
@@ -485,13 +486,13 @@
   {
    "subject_type": "Phenotype",
    "object_type": "Body Part",
-   "total": 183701,
+   "total": 192700,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 118809,
+     "count": 126421,
      "sources": [
       "nbo",
       "upheno"
@@ -499,14 +500,14 @@
     },
     {
      "predicate": "affects",
-     "count": 64586,
+     "count": 65948,
      "sources": [
       "upheno"
      ]
     },
     {
      "predicate": "subclass_of",
-     "count": 306,
+     "count": 331,
      "sources": [
       "upheno"
      ]
@@ -540,13 +541,13 @@
   {
    "subject_type": "Phenotype",
    "object_type": "(other)",
-   "total": 553933,
+   "total": 556490,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "has_part",
-     "count": 494348,
+     "count": 493521,
      "sources": [
       "ddpheno",
       "fypo",
@@ -560,7 +561,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 38615,
+     "count": 41358,
      "sources": [
       "fypo",
       "mp",
@@ -570,14 +571,14 @@
     },
     {
      "predicate": "affects",
-     "count": 19725,
+     "count": 20351,
      "sources": [
       "upheno"
      ]
     },
     {
      "predicate": "subclass_of",
-     "count": 747,
+     "count": 763,
      "sources": [
       "fypo",
       "mp",
@@ -587,7 +588,7 @@
     },
     {
      "predicate": "homologous_to",
-     "count": 487,
+     "count": 486,
      "sources": [
       "upheno"
      ]
@@ -611,17 +612,18 @@
   {
    "subject_type": "Gene / Variant",
    "object_type": "Disease",
-   "total": 222887,
+   "total": 231669,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "causes",
-     "count": 191268,
+     "count": 206889,
      "sources": [
       "clingen",
       "clinvar",
-      "omim"
+      "omim",
+      "orphanet"
      ]
     },
     {
@@ -635,31 +637,32 @@
     },
     {
      "predicate": "associated_with_increased_likelihood_of",
-     "count": 8502,
+     "count": 8484,
      "sources": [
       "clingen",
       "clinvar"
      ]
     },
     {
-     "predicate": "gene_associated_with_condition",
-     "count": 8217,
-     "sources": [
-      "orphanet"
-     ]
-    },
-    {
      "predicate": "genetically_associated_with",
-     "count": 3965,
+     "count": 3990,
      "sources": [
       "clingen"
      ]
     },
     {
      "predicate": "contributes_to",
-     "count": 613,
+     "count": 1057,
      "sources": [
-      "omim"
+      "omim",
+      "orphanet"
+     ]
+    },
+    {
+     "predicate": "gene_associated_with_condition",
+     "count": 927,
+     "sources": [
+      "orphanet"
      ]
     }
    ]
@@ -667,13 +670,13 @@
   {
    "subject_type": "Gene / Variant",
    "object_type": "Phenotype",
-   "total": 1746586,
+   "total": 1898777,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "has_phenotype",
-     "count": 1746582,
+     "count": 1898773,
      "sources": [
       "dictybase",
       "hpo-annotations",
@@ -699,13 +702,13 @@
   {
    "subject_type": "Gene / Variant",
    "object_type": "Gene / Variant",
-   "total": 5627199,
+   "total": 5855424,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "interacts_with",
-     "count": 2758253,
+     "count": 2758376,
      "sources": [
       "biogrid",
       "string"
@@ -713,7 +716,7 @@
     },
     {
      "predicate": "orthologous_to",
-     "count": 1710616,
+     "count": 1789171,
      "sources": [
       "panther",
       "xenbase",
@@ -722,7 +725,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 687498,
+     "count": 688429,
      "sources": [
       "mgi",
       "mmrrc",
@@ -732,18 +735,20 @@
     },
     {
      "predicate": "is_sequence_variant_of",
-     "count": 279867,
+     "count": 427572,
      "sources": [
       "clingen",
       "clinvar",
+      "flybase",
       "mgi",
       "rgd",
+      "sgd",
       "zfin"
      ]
     },
     {
      "predicate": "has_sequence_variant",
-     "count": 190965,
+     "count": 191876,
      "sources": [
       "mgi",
       "mmrrc",
@@ -772,13 +777,13 @@
   {
    "subject_type": "Gene / Variant",
    "object_type": "Body Part",
-   "total": 3597243,
+   "total": 3786610,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "expressed_in",
-     "count": 2444976,
+     "count": 2587056,
      "sources": [
       "bgee",
       "flybase",
@@ -791,7 +796,7 @@
     },
     {
      "predicate": "located_in",
-     "count": 810151,
+     "count": 841457,
      "sources": [
       "agbase",
       "alzheimers-university-of-toronto",
@@ -831,7 +836,7 @@
     },
     {
      "predicate": "active_in",
-     "count": 196067,
+     "count": 206708,
      "sources": [
       "agbase",
       "aruk-ucl",
@@ -858,7 +863,7 @@
     },
     {
      "predicate": "part_of",
-     "count": 140219,
+     "count": 145494,
      "sources": [
       "agbase",
       "alzheimers-university-of-toronto",
@@ -895,7 +900,7 @@
     },
     {
      "predicate": "colocalizes_with",
-     "count": 5830,
+     "count": 5895,
      "sources": [
       "agbase",
       "aruk-ucl",
@@ -943,13 +948,13 @@
   {
    "subject_type": "Gene / Variant",
    "object_type": "(other)",
-   "total": 2573399,
+   "total": 2819441,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "enables",
-     "count": 1140036,
+     "count": 1180300,
      "sources": [
       "agbase",
       "alzheimers-university-of-toronto",
@@ -996,7 +1001,7 @@
     },
     {
      "predicate": "actively_involved_in",
-     "count": 1039865,
+     "count": 1072647,
      "sources": [
       "agbase",
       "alzheimers-university-of-toronto",
@@ -1047,8 +1052,15 @@
      ]
     },
     {
+     "predicate": "has_phenotype",
+     "count": 162414,
+     "sources": [
+      "flybase"
+     ]
+    },
+    {
      "predicate": "acts_upstream_of_or_within",
-     "count": 133070,
+     "count": 143246,
      "sources": [
       "alzheimers-university-of-toronto",
       "aruk-ucl",
@@ -1070,7 +1082,7 @@
     },
     {
      "predicate": "contributes_to",
-     "count": 10830,
+     "count": 11148,
      "sources": [
       "agbase",
       "aruk-ucl",
@@ -1096,7 +1108,7 @@
     },
     {
      "predicate": "acts_upstream_of",
-     "count": 2600,
+     "count": 2631,
      "sources": [
       "agbase",
       "aruk-ucl",
@@ -1112,24 +1124,8 @@
      ]
     },
     {
-     "predicate": "acts_upstream_of_positive_effect",
-     "count": 508,
-     "sources": [
-      "agbase",
-      "aruk-ucl",
-      "bhf-ucl",
-      "cafa",
-      "flybase",
-      "go-central",
-      "parkinsonsuk-ucl",
-      "rgd",
-      "uniprot",
-      "wb"
-     ]
-    },
-    {
      "predicate": "acts_upstream_of_or_within_positive_effect",
-     "count": 494,
+     "count": 535,
      "sources": [
       "alzheimers-university-of-toronto",
       "aruk-ucl",
@@ -1145,8 +1141,39 @@
      ]
     },
     {
+     "predicate": "acts_upstream_of_positive_effect",
+     "count": 515,
+     "sources": [
+      "agbase",
+      "aruk-ucl",
+      "bhf-ucl",
+      "cafa",
+      "flybase",
+      "go-central",
+      "parkinsonsuk-ucl",
+      "rgd",
+      "uniprot",
+      "wb"
+     ]
+    },
+    {
+     "predicate": "acts_upstream_of_or_within_negative_effect",
+     "count": 176,
+     "sources": [
+      "aruk-ucl",
+      "bhf-ucl",
+      "go-central",
+      "mgi",
+      "rgd",
+      "sgd",
+      "uniprot",
+      "wb",
+      "zfin"
+     ]
+    },
+    {
      "predicate": "acts_upstream_of_negative_effect",
-     "count": 170,
+     "count": 171,
      "sources": [
       "alzheimers-university-of-toronto",
       "aruk-ucl",
@@ -1160,30 +1187,52 @@
       "uniprot",
       "wb"
      ]
-    },
-    {
-     "predicate": "acts_upstream_of_or_within_negative_effect",
-     "count": 168,
-     "sources": [
-      "aruk-ucl",
-      "bhf-ucl",
-      "go-central",
-      "mgi",
-      "rgd",
-      "uniprot",
-      "wb",
-      "zfin"
-     ]
     }
    ]
   },
   {
    "subject_type": "Drug",
    "object_type": "Disease",
-   "total": 29,
-   "status": "gap",
-   "goal_note": "trough: ctd/medic removed in 2026-07-17 build, medic returns next release",
+   "total": 38259,
+   "status": "met",
+   "goal_note": "ctd/medic; floor guards against another trough like the 2026-07-17 build",
    "predicates": [
+    {
+     "predicate": "treats",
+     "count": 24563,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
+    {
+     "predicate": "contraindicated_in",
+     "count": 9953,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
+    {
+     "predicate": "preventative_for_condition",
+     "count": 3574,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
+    {
+     "predicate": "diagnoses",
+     "count": 140,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
     {
      "predicate": "applied_to_treat",
      "count": 29,
@@ -1196,15 +1245,51 @@
   {
    "subject_type": "Drug",
    "object_type": "Phenotype",
-   "total": 33,
+   "total": 9002,
    "status": "info",
    "goal_note": null,
    "predicates": [
+    {
+     "predicate": "treats",
+     "count": 5622,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
+    {
+     "predicate": "contraindicated_in",
+     "count": 2374,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
+    {
+     "predicate": "preventative_for_condition",
+     "count": 950,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
+     ]
+    },
     {
      "predicate": "applied_to_treat",
      "count": 27,
      "sources": [
       "cureid"
+     ]
+    },
+    {
+     "predicate": "diagnoses",
+     "count": 23,
+     "sources": [
+      "ema",
+      "fda-dailymed",
+      "pmda"
      ]
     },
     {
@@ -1227,13 +1312,13 @@
   {
    "subject_type": "Drug",
    "object_type": "Drug",
-   "total": 59482,
+   "total": 58945,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "subclass_of",
-     "count": 42261,
+     "count": 41099,
      "sources": [
       "chebi",
       "so"
@@ -1241,7 +1326,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 16056,
+     "count": 16388,
      "sources": [
       "chebi",
       "so"
@@ -1249,7 +1334,7 @@
     },
     {
      "predicate": "has_part",
-     "count": 856,
+     "count": 1149,
      "sources": [
       "chebi"
      ]
@@ -1307,13 +1392,13 @@
   {
    "subject_type": "Drug",
    "object_type": "(other)",
-   "total": 109315,
+   "total": 109399,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "participates_in",
-     "count": 109290,
+     "count": 109374,
      "sources": [
       "reactome"
      ]
@@ -1364,14 +1449,14 @@
      ]
     },
     {
-     "predicate": "is_input_of",
+     "predicate": "is_output_of",
      "count": 1,
      "sources": [
       "uberon"
      ]
     },
     {
-     "predicate": "is_output_of",
+     "predicate": "is_input_of",
      "count": 1,
      "sources": [
       "uberon"
@@ -1423,13 +1508,13 @@
   {
    "subject_type": "Body Part",
    "object_type": "Body Part",
-   "total": 232344,
+   "total": 232829,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "subclass_of",
-     "count": 125937,
+     "count": 126197,
      "sources": [
       "cl",
       "emapa",
@@ -1443,7 +1528,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 50110,
+     "count": 50124,
      "sources": [
       "cl",
       "fbbt",
@@ -1455,7 +1540,7 @@
     },
     {
      "predicate": "part_of",
-     "count": 34548,
+     "count": 34653,
      "sources": [
       "cl",
       "emapa",
@@ -1469,7 +1554,7 @@
     },
     {
      "predicate": "overlaps",
-     "count": 13276,
+     "count": 13275,
      "sources": [
       "cl",
       "fbbt",
@@ -1480,7 +1565,7 @@
     },
     {
      "predicate": "develops_from",
-     "count": 5619,
+     "count": 5715,
      "sources": [
       "cl",
       "emapa",
@@ -1503,9 +1588,10 @@
     },
     {
      "predicate": "coexists_with",
-     "count": 931,
+     "count": 942,
      "sources": [
       "cl",
+      "fbbt",
       "go",
       "uberon"
      ]
@@ -1550,14 +1636,14 @@
      ]
     },
     {
-     "predicate": "causes",
+     "predicate": "location_of",
      "count": 19,
      "sources": [
       "uberon"
      ]
     },
     {
-     "predicate": "location_of",
+     "predicate": "causes",
      "count": 19,
      "sources": [
       "uberon"
@@ -1728,7 +1814,7 @@
    "object_type": "Disease",
    "total": 0,
    "status": "gap",
-   "goal_note": "not in LOINC itself; needs guidelines/literature source",
+   "goal_note": "bonobo LOINC bands + dismech LOINC diagnostics (monarch-bdc-kg#25)",
    "predicates": []
   },
   {
@@ -1772,13 +1858,13 @@
   {
    "subject_type": "Measurement / Clinical Lab",
    "object_type": "Drug",
-   "total": 4150,
+   "total": 4189,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 4150,
+     "count": 4189,
      "sources": [
       "omop2obo"
      ]
@@ -1919,8 +2005,8 @@
    "subject_type": "Procedure",
    "object_type": "Body Part",
    "total": 0,
-   "status": "gap",
-   "goal_note": "candidate source: SNOMED procedure-site / NCIT anatomy relations",
+   "status": "not-target",
+   "goal_note": "deferred: no source planned; candidate is SNOMED procedure-site / NCIT anatomy relations",
    "predicates": []
   },
   {
@@ -1951,8 +2037,8 @@
    "subject_type": "Imaging / Waveform",
    "object_type": "Disease",
    "total": 0,
-   "status": "gap",
-   "goal_note": "blocked: no biolink home for imaging; RadLex license open question",
+   "status": "not-target",
+   "goal_note": "deferred: no biolink home for imaging; RadLex license open question",
    "predicates": []
   },
   {
@@ -2014,7 +2100,7 @@
   {
    "subject_type": "(other)",
    "object_type": "Disease",
-   "total": 9659,
+   "total": 9811,
    "status": "info",
    "goal_note": null,
    "predicates": [
@@ -2028,9 +2114,30 @@
     },
     {
      "predicate": "related_to",
-     "count": 52,
+     "count": 68,
      "sources": [
       "oba"
+     ]
+    },
+    {
+     "predicate": "contraindicated_in",
+     "count": 57,
+     "sources": [
+      "fda-dailymed"
+     ]
+    },
+    {
+     "predicate": "diagnoses",
+     "count": 34,
+     "sources": [
+      "fda-dailymed"
+     ]
+    },
+    {
+     "predicate": "treats",
+     "count": 30,
+     "sources": [
+      "fda-dailymed"
      ]
     },
     {
@@ -2039,13 +2146,20 @@
      "sources": [
       "cureid"
      ]
+    },
+    {
+     "predicate": "preventative_for_condition",
+     "count": 15,
+     "sources": [
+      "fda-dailymed"
+     ]
     }
    ]
   },
   {
    "subject_type": "(other)",
    "object_type": "Phenotype",
-   "total": 207601,
+   "total": 207628,
    "status": "info",
    "goal_note": null,
    "predicates": [
@@ -2059,7 +2173,7 @@
     },
     {
      "predicate": "subclass_of",
-     "count": 860,
+     "count": 859,
      "sources": [
       "oba",
       "upheno"
@@ -2067,7 +2181,7 @@
     },
     {
      "predicate": "homologous_to",
-     "count": 487,
+     "count": 486,
      "sources": [
       "upheno"
      ]
@@ -2081,10 +2195,38 @@
      ]
     },
     {
+     "predicate": "contraindicated_in",
+     "count": 11,
+     "sources": [
+      "fda-dailymed"
+     ]
+    },
+    {
+     "predicate": "preventative_for_condition",
+     "count": 8,
+     "sources": [
+      "fda-dailymed"
+     ]
+    },
+    {
+     "predicate": "treats",
+     "count": 7,
+     "sources": [
+      "fda-dailymed"
+     ]
+    },
+    {
      "predicate": "affects",
      "count": 4,
      "sources": [
       "upheno"
+     ]
+    },
+    {
+     "predicate": "diagnoses",
+     "count": 3,
+     "sources": [
+      "fda-dailymed"
      ]
     }
    ]
@@ -2116,7 +2258,7 @@
   {
    "subject_type": "(other)",
    "object_type": "Drug",
-   "total": 27827,
+   "total": 27825,
    "status": "info",
    "goal_note": null,
    "predicates": [
@@ -2136,7 +2278,7 @@
     },
     {
      "predicate": "related_to",
-     "count": 2734,
+     "count": 2732,
      "sources": [
       "foodon",
       "go",
@@ -2191,13 +2333,13 @@
   {
    "subject_type": "(other)",
    "object_type": "Body Part",
-   "total": 9772,
+   "total": 9757,
    "status": "info",
    "goal_note": null,
    "predicates": [
     {
      "predicate": "related_to",
-     "count": 6399,
+     "count": 6386,
      "sources": [
       "fbcv",
       "go",
@@ -2250,7 +2392,7 @@
     },
     {
      "predicate": "subclass_of",
-     "count": 72,
+     "count": 69,
      "sources": [
       "HsapDv",
       "fbdv",
@@ -2275,17 +2417,17 @@
      ]
     },
     {
+     "predicate": "has_part",
+     "count": 3,
+     "sources": [
+      "foodon"
+     ]
+    },
+    {
      "predicate": "regulates",
      "count": 2,
      "sources": [
       "go"
-     ]
-    },
-    {
-     "predicate": "has_part",
-     "count": 2,
-     "sources": [
-      "foodon"
      ]
     }
    ]
