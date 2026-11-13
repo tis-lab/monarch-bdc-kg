@@ -1,0 +1,8 @@
+# Settings for the search exports (scripts/export_search.py, `just search-index`).
+
+# Sources whose node labels and text (name, synonyms, description, ...) are blanked in the
+# search index. Empty: the API is served with controlled access (the data portal is behind
+# BDC login), so licensed labels such as the SemMedDB snomedct tier's SNOMED CT names stay
+# searchable. For any deployment without access control, list the sources here and re-export,
+# e.g. procedure_to_disease_snomedct_nodes. See docs/adr/0003.
+restricted_label_sources: []

@@ -154,13 +154,15 @@ varlib: varlib-sources varlib-extract varlib-load
 # bdc-search (search/): a Monarch v3 compatible search API over {{db}}.
 
 search_dir := "data/search"
+# per-deployment search settings (restricted label sources); see docs/adr/0003
+search_config := "search.yaml"
 
 # Export search documents from {{db}} (scripts/export_search.py: one per KG node, plus the
 # harmonized concepts when {{db}} has the varlib schema) and build the index beside them
 search-index:
     #!/usr/bin/env bash
     set -euo pipefail
-    uv run scripts/export_search.py {{db}} {{search_dir}}
+    uv run scripts/export_search.py {{db}} {{search_dir}} --config {{search_config}}
     # build beside the served index and swap it in only once it succeeds
     rm -rf {{search_dir}}/index.new
     cargo run --release --manifest-path search/Cargo.toml -- index \

@@ -7,9 +7,10 @@ Writes, into OUT_DIR:
   concepts-meta.json   the HV commit and date the concepts were built from
 
 Both SQL files read `search_nodes`, a view this script defines over `nodes` with every label
-column (name, synonyms, description, ...) of restricted sources blanked (`restricted_label_sources` in varlib.yaml, the same list
-scripts/export_kg_labels.py uses). Defining it once here means a restricted source can't be
-blanked in one export and leaked by the other.
+column (name, synonyms, description, ...) of restricted sources blanked. The sources are a
+per-deployment setting, `restricted_label_sources` in search.yaml: empty for the
+controlled-access API. Defining the view once means a restricted source can't be blanked in one
+export and leaked by the other.
 """
 
 import argparse
@@ -44,7 +45,8 @@ LABEL_COLUMNS = [
 def define_search_nodes(con: duckdb.DuckDBPyConnection, restricted: list[str]):
     """`nodes`, with every label column blanked where the node comes from a restricted source."""
     con.execute("CREATE OR REPLACE TEMP TABLE restricted_label_source (provided_by VARCHAR)")
-    con.executemany("INSERT INTO restricted_label_source VALUES (?)", [[s] for s in restricted])
+    if restricted:  # duckdb's executemany rejects an empty list
+        con.executemany("INSERT INTO restricted_label_source VALUES (?)", [[s] for s in restricted])
     present = {row[0] for row in con.execute("DESCRIBE nodes").fetchall()}
     blanked = ",\n            ".join(
         f"CASE WHEN restricted THEN NULL ELSE {column} END AS {column}"
@@ -105,7 +107,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("db", type=Path)
     parser.add_argument("out_dir", type=Path)
-    parser.add_argument("--config", type=Path, default=ROOT / "varlib.yaml")
+    parser.add_argument("--config", type=Path, default=ROOT / "search.yaml",
+                        help="search settings (restricted_label_sources)")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)

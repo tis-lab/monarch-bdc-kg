@@ -132,3 +132,13 @@ def test_a_partial_varlib_schema_is_skipped(con):
     assert not export_search.has_varlib(con)
     con.execute(VARLIB.replace("CREATE SCHEMA varlib;", "").replace("CREATE TABLE varlib.concept ", "CREATE OR REPLACE TABLE varlib.concept "))
     assert export_search.has_varlib(con)
+
+
+def test_the_controlled_access_deployment_blanks_nothing(con, tmp_path):
+    """search.yaml lists no restricted sources: the API is behind access control (ADR 3)."""
+    assert export_search.restricted_sources(ROOT / "search.yaml") == []
+    node(con, "SNOMEDCT:1", "biolink:Procedure", "licensed label", provided_by=RESTRICTED)
+    export_search.define_search_nodes(con, export_search.restricted_sources(ROOT / "search.yaml"))
+    out = tmp_path / "entities.jsonl"
+    export_search.export_json(con, ROOT / "sql" / "search_entity.sql", out)
+    assert json.loads(out.read_text())["name"] == "licensed label"

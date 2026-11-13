@@ -80,8 +80,8 @@ them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_view
 [tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's nodes. Because responses
 match Monarch's, the BDC data portal middleware can point its `MONARCH_BASE_URL` at it.
 
-`just search-index` exports the documents with `scripts/export_search.py`, which blanks
-restricted labels and text once for both exports (see [docs/adr](docs/adr)); terms are defined in
+`just search-index` exports the documents with `scripts/export_search.py`, which blanks the
+labels of any restricted sources (search.yaml) once for both exports (see [docs/adr](docs/adr)); terms are defined in
 [CONTEXT.md](CONTEXT.md).
 
 When the duckdb has the `varlib` schema, `just search-index` also writes the harmonized
@@ -108,9 +108,11 @@ just search-image   # linux/amd64 image; run with the index mounted at /index
 
 The query mirrors monarch-app's autocomplete: Monarch's query fields and boosts, every
 word required, and Monarch's category, deprecation and exact-synonym multipliers. Analyzers
-follow monarch-ingest's Solr field types. Labels and other text from restricted sources (the
-SemMedDB snomedct tier) are blanked by `scripts/export_search.py` before either export runs,
-so the index never carries them ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export.md)).
+follow monarch-ingest's Solr field types. The API is served with controlled access (the data
+portal is behind BDC login), so licensed labels such as the SemMedDB snomedct tier's SNOMED CT
+names are searchable. For a deployment without access control, list those sources under
+`restricted_label_sources` in [`search.yaml`](search.yaml) and their labels and text are
+blanked in both exports ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export.md)).
 
 Cursor pages report `offset: 0`: a cursor walk has no offset, so count pages client-side.
 

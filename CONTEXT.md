@@ -10,9 +10,10 @@ meaning nearby (Monarch, the portal middleware, the variable library), the diffe
 - **KG node** / **entity** — one row of `nodes`. Monarch's API calls these entities; the search
   API's `/v3/api/*` routes return them in Monarch's `SearchResult` shape.
 - **Layer** — a BDC source appended to the base KG (`sources.yaml`), e.g. SemMedDB procedures.
-- **Restricted source** — a layer whose labels are licensed and must not be redistributed
-  (`restricted_label_sources` in `varlib.yaml`). Its nodes stay in the graph and the index;
-  only their labels are blanked on export.
+- **Restricted source** — a layer whose labels are licensed for limited redistribution. For a
+  search deployment without access control, it's listed in `search.yaml` and its labels are
+  blanked on export; the controlled-access API lists none. `varlib.yaml` has its own list, so
+  concept names never come from restricted labels.
 
 ## Variable library
 
