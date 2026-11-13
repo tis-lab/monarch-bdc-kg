@@ -34,14 +34,14 @@ goals:
      note: "filled by semmeddb-procedure + snomed-hasfocus layers"}
   - {subject: Procedure, object: Phenotype, goal: target,
      note: "filled by semmeddb-procedure + snomed-hasfocus layers"}
-  - {subject: Procedure, object: "Body Part", goal: target,
-     note: "candidate source: SNOMED procedure-site / NCIT anatomy relations"}
+  - {subject: Procedure, object: "Body Part", goal: not-target,
+     note: "deferred: no source planned; candidate is SNOMED procedure-site / NCIT anatomy relations"}
   - {subject: "Measurement / Clinical Lab", object: Disease, goal: target,
-     note: "not in LOINC itself; needs guidelines/literature source"}
-  - {subject: "Imaging / Waveform", object: Disease, goal: target,
-     note: "blocked: no biolink home for imaging; RadLex license open question"}
+     note: "bonobo LOINC bands + dismech LOINC diagnostics (monarch-bdc-kg#25)"}
+  - {subject: "Imaging / Waveform", object: Disease, goal: not-target,
+     note: "deferred: no biolink home for imaging; RadLex license open question"}
   - {subject: Drug, object: Disease, goal: target, floor: 1000,
-     note: "trough: ctd/medic removed in 2026-07-17 build, medic returns next release"}
+     note: "ctd/medic; floor guards against another trough like the 2026-07-17 build"}
 
   - {subject: Disease, object: Procedure, goal: not-target,
      note: "inverse of Procedure→Disease; directional asymmetry is intended"}
