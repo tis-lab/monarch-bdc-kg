@@ -90,6 +90,11 @@ pub struct Fields {
 
 pub const STATIC_BOOST: &str = "static_boost";
 
+/// The index layout this build of bdc-search reads. Bump it whenever fields change: the server
+/// refuses an index built for another layout, with a message, instead of failing on a missing
+/// field.
+pub const SCHEMA_VERSION: u32 = 2;
+
 pub fn build() -> Schema {
     let mut builder = Schema::builder();
     let text = TextOptions::default().set_indexing_options(

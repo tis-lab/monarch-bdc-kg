@@ -1,0 +1,8 @@
+# bdc-search with a KG release's search index baked in, so a new KG release is a new image:
+#   just search-image          (the service, bdc-search:dev)
+#   just search-image-release  (this, bdc-search:<release>)
+# The build context is the search output directory; Dockerfile.release.dockerignore sends only
+# index/, not the ~1 GB of exported JSONL beside it.
+ARG BASE=bdc-search:dev
+FROM ${BASE}
+COPY index/ /index/

@@ -65,6 +65,11 @@ enum Command {
         #[arg(long, env = "BIND", default_value = "0.0.0.0:8080")]
         bind: SocketAddr,
     },
+    /// Print what an index directory holds, as /version reports it (for release manifests)
+    Info {
+        #[arg(long)]
+        index_dir: PathBuf,
+    },
     /// Print /v3/api/autocomplete's response for a query
     Query {
         #[arg(long)]
@@ -79,6 +84,8 @@ async fn main() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        // logs to stderr, so stdout is only the command's output (`info` and `query` print JSON)
+        .with_writer(std::io::stderr)
         .init();
 
     match Cli::parse().command {
@@ -100,6 +107,12 @@ async fn main() -> Result<()> {
             };
             tracing::info!(count, seconds = started.elapsed().as_secs(), "index built");
         }
+        Command::Info { index_dir } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&open(&index_dir)?.info())?
+            );
+        }
         Command::Query { index_dir, q } => {
             let app = open(&index_dir)?;
             let results = app.with_coverage(app.entities.autocomplete(&q)?);
@@ -117,7 +130,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Open the entity index and, when present, the harmonized concepts beside it.
+/// Written into the index directory by `just search-release` (scripts/package_search.py).
+const RELEASE_MANIFEST: &str = "manifest.json";
+
+/// Open the entity index and, when present, the harmonized concepts and release manifest
+/// beside it.
 fn open(index_dir: &Path) -> Result<App> {
     let entities = Arc::new(EntityIndex::open(index_dir)?);
     tracing::info!(docs = entities.num_docs(), index = %index_dir.display(), "entity index opened");
@@ -129,5 +146,13 @@ fn open(index_dir: &Path) -> Result<App> {
             concepts::CONCEPTS_FILE
         ),
     }
-    Ok(App { entities, concepts })
+    let release = match std::fs::read_to_string(index_dir.join(RELEASE_MANIFEST)) {
+        Ok(text) => Some(Arc::new(serde_json::from_str(&text)?)),
+        Err(_) => None,
+    };
+    Ok(App {
+        entities,
+        concepts,
+        release,
+    })
 }

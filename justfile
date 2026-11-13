@@ -83,7 +83,7 @@ upload:
     gcloud storage rsync -r output {{bucket}}/kg/latest
     echo "released {{bucket}}/kg/$release (+ latest)"
 
-all: download conform layer verify coverage
+all: download conform layer verify coverage search-release
 
 # ── variable library (exploratory) ────────────────────────────────────────
 #
@@ -176,6 +176,13 @@ search-index:
     mv {{search_dir}}/index.new {{search_dir}}/index
     rm -rf {{search_dir}}/index.old
 
+# Package the search index for a KG release into output/search/ (index.tar.gz + manifest.json),
+# which `just upload` publishes beside the KG as kg/{release}/search/
+search-release release=`date +%Y-%m-%d`: search-index
+    cargo build --release -q --manifest-path search/Cargo.toml
+    uv run scripts/package_search.py {{search_dir}}/index output/search \
+        --kg-release {{release}} --kg-db {{db}}
+
 # Serve the index on localhost:8080 (/v3/api/autocomplete, /search, /entity/{id}, /bdc/...)
 search-serve:
     cargo run --release --manifest-path search/Cargo.toml -- serve \
@@ -184,6 +191,12 @@ search-serve:
 # Container image for Cloud Apps; run it with the index mounted at /index
 search-image:
     docker build --platform linux/amd64 -t bdc-search:dev search
+
+# Image with a release's index baked in at /index, tagged with the KG release (after
+# search-image and search-release)
+search-image-release release=`date +%Y-%m-%d`:
+    docker build --platform linux/amd64 -f search/Dockerfile.release \
+        --build-arg BASE=bdc-search:dev -t bdc-search:{{release}} {{search_dir}}
 
 # ── dashboard ─────────────────────────────────────────────────────────────
 

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tantivy::collector::{Count, DocSetCollector, TopDocs};
 use tantivy::index::SegmentId;
 use tantivy::query::{
@@ -33,6 +33,18 @@ use crate::schema::{self, Entity, Fields, SolrFieldType};
 /// tantivy queries are built from boxed parts; this names the type.
 type BoxQuery = Box<dyn Query>;
 
+/// Written beside an entity index when it is built, and checked when it is opened.
+pub const BUILD_INFO_FILE: &str = "bdc-search-index.json";
+
+/// What built an index: lets the server refuse an index it can't read, and lets a release
+/// manifest say what it holds.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BuildInfo {
+    pub schema_version: u32,
+    pub built_by: String,
+    pub documents: u64,
+}
+
 /// Build an entity index in `dir` from JSONL rows of sql/search_entity.sql.
 pub fn build_index(input: impl BufRead, dir: &Path, heap_bytes: usize) -> Result<u64> {
     std::fs::create_dir_all(dir)?;
@@ -48,7 +60,54 @@ pub fn build_index(input: impl BufRead, dir: &Path, heap_bytes: usize) -> Result
             }
             Err(e) => Some(Err(e.into())),
         });
-    write_entities(&index, entities, heap_bytes)
+    let documents = write_entities(&index, entities, heap_bytes)?;
+    let info = BuildInfo {
+        schema_version: schema::SCHEMA_VERSION,
+        built_by: format!("bdc-search {}", env!("CARGO_PKG_VERSION")),
+        documents,
+    };
+    std::fs::write(dir.join(BUILD_INFO_FILE), serde_json::to_vec_pretty(&info)?)?;
+    make_world_readable(dir)?;
+    Ok(documents)
+}
+
+/// tantivy writes some files (`.managed.json`) readable by their owner only. A served index is
+/// read by whatever user the container runs as (OpenShift assigns an arbitrary one), so every
+/// file is made readable by all; nothing in it is secret beyond what the image already holds.
+fn make_world_readable(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            let mut permissions = std::fs::metadata(&path)?.permissions();
+            permissions.set_mode(permissions.mode() | 0o444);
+            std::fs::set_permissions(&path, permissions)?;
+        }
+    }
+    Ok(())
+}
+
+/// Check that `dir` holds an index this build of bdc-search can serve.
+fn check_build_info(dir: &Path) -> Result<BuildInfo> {
+    let path = dir.join(BUILD_INFO_FILE);
+    let text = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "{} has no {BUILD_INFO_FILE}; rebuild it with `just search-index`",
+            dir.display()
+        )
+    })?;
+    let info: BuildInfo =
+        serde_json::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
+    anyhow::ensure!(
+        info.schema_version == schema::SCHEMA_VERSION,
+        "{} was built by {} for index layout {}, but this bdc-search reads layout {}; rebuild it with `just search-index`",
+        dir.display(),
+        info.built_by,
+        info.schema_version,
+        schema::SCHEMA_VERSION
+    );
+    Ok(info)
 }
 
 /// Add entities to an empty index and commit.
@@ -228,6 +287,7 @@ pub struct EntityIndex {
 impl EntityIndex {
     /// Open an index directory for serving (read-only: see readonly.rs).
     pub fn open(dir: &Path) -> Result<EntityIndex> {
+        check_build_info(dir)?;
         let directory = ReadOnlyDirectory::open(dir)
             .with_context(|| format!("opening index {}", dir.display()))?;
         EntityIndex::from_index(Index::open(directory)?)
@@ -257,6 +317,11 @@ impl EntityIndex {
 
     pub fn num_docs(&self) -> u64 {
         self.reader.searcher().num_docs()
+    }
+
+    /// This build of the index, as cursors and `/version` show it.
+    pub fn version(&self) -> String {
+        format!("{:x}", self.version)
     }
 
     /// Monarch's `/autocomplete`: the top 10 for `q`.
@@ -713,5 +778,50 @@ pub mod tests {
             index.cursor(&nan, "asthma", &[]),
             Err(CursorError::Malformed)
         );
+    }
+
+    #[test]
+    fn an_index_from_another_layout_is_refused_with_a_reason() {
+        let dir = std::env::temp_dir().join(format!("bdc-search-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        build_index(
+            "{\"id\":\"MONDO:1\",\"name\":\"asthma\"}\n".as_bytes(),
+            &dir,
+            15_000_000,
+        )
+        .unwrap();
+        assert!(EntityIndex::open(&dir).is_ok());
+        #[cfg(unix)]
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            use std::os::unix::fs::PermissionsExt;
+            let entry = entry.unwrap();
+            let mode = entry.metadata().unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o444,
+                0o444,
+                "{} isn't world-readable",
+                entry.path().display()
+            );
+        }
+
+        let stale = BuildInfo {
+            schema_version: 1,
+            built_by: "bdc-search 0.0.1".into(),
+            documents: 1,
+        };
+        std::fs::write(
+            dir.join(BUILD_INFO_FILE),
+            serde_json::to_vec(&stale).unwrap(),
+        )
+        .unwrap();
+        let error = EntityIndex::open(&dir).err().unwrap().to_string();
+        assert!(
+            error.contains("layout 1") && error.contains("just search-index"),
+            "{error}"
+        );
+
+        std::fs::remove_file(dir.join(BUILD_INFO_FILE)).unwrap();
+        assert!(EntityIndex::open(&dir).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
