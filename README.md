@@ -74,6 +74,48 @@ them to each other and to the KG are in [`sql/varlib_views.sql`](sql/varlib_view
 - `varlib.library_variable_concept`: bdc-variable-library variables to concepts, by the concept code their record fixes (drug, condition and procedure codes only so far)
 - `varlib.lexicon` and `varlib.lexicon_word`: every surface string and word with a weight, the input to a words-mode autocomplete
 
+## Search API
+
+[`search/`](search/) is `bdc-search`, a Rust service that answers Monarch v3 routes from a
+[tantivy](https://github.com/quickwit-oss/tantivy) index of the KG's nodes. Because responses
+match Monarch's, the BDC data portal middleware can point its `MONARCH_BASE_URL` at it.
+
+`just search-index` exports the documents with `scripts/export_search.py`, which blanks the
+labels of any restricted sources (search.yaml) once for both exports (see [docs/adr](docs/adr)); terms are defined in
+[CONTEXT.md](CONTEXT.md).
+
+When the duckdb has the `varlib` schema, `just search-index` also writes the harmonized
+concepts (`sql/search_concept.sql`: one per concept code, labelled from the KG) beside the
+index. The `/bdc` routes serve them in the middleware's own index format, so its
+`HARMONIZED_INDEX` can point at `/bdc/harmonized-index.json` instead of its bundled file, and
+`/search` and `/autocomplete` hits carry the same `bdc` coverage the middleware computes.
+
+| route | parameters |
+|---|---|
+| `GET /v3/api/autocomplete` | `q` (top 10) |
+| `GET /v3/api/search` | `q` (default `*:*`), `category` (repeatable), `limit` (0-500, default 20), and either `offset` (offset + limit ≤ 10,000) or `cursor` (`*`, then each response's `next_cursor`, for any depth) |
+| `GET /v3/api/entity/{id}` | node fields only; no associations or hierarchy yet |
+| `GET /bdc/harmonized-index.json` | the harmonized concepts in bdc-dp-middleware's index format (schemaVersion 2) |
+| `GET /bdc/concepts` | `q` (text, or a CURIE for an exact lookup), `limit` (default 25) |
+| `GET /bdc/concepts/{curie}` | one harmonized concept |
+| `GET /health/live`, `/health/ready` | probes |
+
+```bash
+just search-index   # sql/search_entity.sql → data/search/entities.jsonl → data/search/index
+just search-serve   # http://localhost:8080/v3/api/autocomplete?q=pulmonary%20hyper
+just search-image   # linux/amd64 image; run with the index mounted at /index
+```
+
+The query mirrors monarch-app's autocomplete: Monarch's query fields and boosts, every
+word required, and Monarch's category, deprecation and exact-synonym multipliers. Analyzers
+follow monarch-ingest's Solr field types. The API is served with controlled access (the data
+portal is behind BDC login), so licensed labels such as the SemMedDB snomedct tier's SNOMED CT
+names are searchable. For a deployment without access control, list those sources under
+`restricted_label_sources` in [`search.yaml`](search.yaml) and their labels and text are
+blanked in both exports ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export.md)).
+
+Cursor pages report `offset: 0`: a cursor walk has no offset, so count pages client-side.
+
 ## Coverage dashboard
 
 Published at **<https://tis-lab.github.io/monarch-bdc-kg/>**.

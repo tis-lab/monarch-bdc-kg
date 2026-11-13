@@ -1,0 +1,25 @@
+[package]
+name = "bdc-search"
+version = "0.1.0"
+edition = "2021"
+# pick dependency versions that support rust-version
+resolver = "3"
+rust-version = "1.88"
+description = "Search API over the BDC knowledge graph, Monarch v3 compatible"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+form_urlencoded = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tantivy = "0.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
