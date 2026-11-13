@@ -116,6 +116,14 @@ blanked in both exports ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export
 
 Cursor pages report `offset: 0`: a cursor walk has no offset, so count pages client-side.
 
+Set `BDC_SEARCH_API_KEY` and every route except `/health/live` and `/health/ready` requires the
+key, sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`; without it, the API is open.
+
+```sh
+BDC_SEARCH_API_KEY=… just search-serve
+curl -H "X-API-Key: $BDC_SEARCH_API_KEY" 'http://localhost:8080/v3/api/search?q=asthma'
+```
+
 ## Coverage dashboard
 
 Published at **<https://tis-lab.github.io/monarch-bdc-kg/>**.
