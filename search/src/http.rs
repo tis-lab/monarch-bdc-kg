@@ -13,11 +13,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{header, StatusCode};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
+use crate::auth::{self, ApiKey};
 use crate::concepts::{HarmonizedConcepts, DEFAULT_MAX_MATCHES};
 use crate::entity_index::{CursorError, EntityIndex, Page, SearchRequest, SearchResults};
 use crate::monarch;
@@ -55,21 +57,27 @@ impl App {
     }
 }
 
-pub fn router(app: App) -> Router {
-    Router::new()
+/// The routes. With an `api_key`, all but the health probes require it (see auth.rs).
+pub fn router(app: App, api_key: Option<ApiKey>) -> Router {
+    let api = Router::new()
         .route("/v3/api/autocomplete", get(autocomplete))
         .route("/v3/api/search", get(search))
         .route("/v3/api/entity/{id}", get(entity))
         .route("/bdc/harmonized-index.json", get(harmonized_index))
         .route("/bdc/concepts", get(search_concepts))
         .route("/bdc/concepts/{curie}", get(concept))
-        // The indexes open before the listener binds, so serving at all means ready.
-        .route("/health/live", get(|| async { "ok" }))
-        .route("/health/ready", get(|| async { "ok" }))
         .route(
             "/version",
             get(|State(app): State<App>| async move { Json(app.info()) }),
-        )
+        );
+    let api = match api_key {
+        Some(key) => api.layer(middleware::from_fn_with_state(key, auth::require_api_key)),
+        None => api,
+    };
+    // Added after the key layer, so they stay open.
+    // The indexes open before the listener binds, so serving at all means ready.
+    api.route("/health/live", get(|| async { "ok" }))
+        .route("/health/ready", get(|| async { "ok" }))
         .with_state(app)
 }
 
@@ -371,7 +379,7 @@ impl IntoResponse for ApiError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::concepts::tests::sample;
     use crate::entity_index::tests::{entity, index_of};
@@ -380,7 +388,7 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
 
-    fn app() -> App {
+    pub(crate) fn app() -> App {
         let mut entities: Vec<_> = (0..30)
             .map(|i| {
                 entity(
@@ -414,7 +422,7 @@ mod tests {
     /// index they came from, so a cursor walk must reuse one app.
     async fn get_from(app: &App, uri: &str) -> (StatusCode, Value) {
         let request = Request::get(uri).body(Body::empty()).unwrap();
-        let response = router(app.clone()).oneshot(request).await.unwrap();
+        let response = router(app.clone(), None).oneshot(request).await.unwrap();
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, serde_json::from_slice(&body).unwrap())

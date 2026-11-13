@@ -1,0 +1,64 @@
+# bdc-search on OpenShift (UNC Cloud Apps). See deploy/README.md.
+#
+# The image carries its KG release's index at /index, so a new release is a new image tag.
+# The API key comes from the `bdc-search` Secret (key `api-key`), created outside this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bdc-search
+  labels: {app: bdc-search}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: bdc-search}
+  template:
+    metadata:
+      labels: {app: bdc-search}
+    spec:
+      containers:
+        - name: bdc-search
+          image: image-registry.openshift-image-registry.svc:5000/kschaper/bdc-search:2026-11-13
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BDC_SEARCH_API_KEY
+              valueFrom:
+                secretKeyRef: {name: bdc-search, key: api-key}
+          # The index is memory-mapped: the process stays small (~20 MB) and the rest is
+          # reclaimable page cache.
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8080}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8080}
+            periodSeconds: 30
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bdc-search
+  labels: {app: bdc-search}
+spec:
+  selector: {app: bdc-search}
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# Public HTTPS route; the API key is the access control.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bdc-search
+  labels: {app: bdc-search}
+spec:
+  to: {kind: Service, name: bdc-search}
+  port: {targetPort: 8080}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
