@@ -8,6 +8,13 @@
 -- scripts/export_search.py) so restricted labels are blank while the KG link is kept.
 -- displayLabel is the label, else the CURIE: never null and never a spec file name.
 --
+-- closure is the concept code, the KG nodes it is or maps to by exactMatch (its anchors,
+-- varlib.concept_anchor), and every superclass of those (rdfs:subClassOf in the KG closure).
+-- A concept is "under" each of these terms, the shape of the cohort builder's term_closure
+-- (bdc-dp-middleware#24): one (ancestor, descendant) pair per entry. closureLabel is their
+-- labels, from `search_nodes` like conceptLabel, as Monarch pairs *_closure with
+-- *_closure_label.
+--
 -- The concept key (prefix upper-cased) and the CURIE pattern must match search/src/concepts.rs.
 WITH classed AS (
     SELECT
@@ -57,6 +64,34 @@ carriers AS (
     WHERE variable_name IS NOT NULL
     GROUP BY concept_key, variable_name
 ),
+anchors AS (
+    SELECT DISTINCT k.concept_key, a.node_id
+    FROM classed k
+    JOIN varlib.concept_anchor a ON a.concept_id = k.id AND a.node_id IS NOT NULL
+),
+anchored AS (
+    -- the anchors themselves, even where the KG has no hierarchy for them (LOINC)
+    SELECT concept_key, node_id AS ancestor FROM anchors
+    UNION
+    SELECT a.concept_key, cl.object_id
+    FROM anchors a
+    JOIN main.closure cl ON cl.subject_id = a.node_id AND cl.predicate_id = 'rdfs:subClassOf'
+),
+closure_ids AS (
+    SELECT concept_key, min(code) AS id FROM classed GROUP BY concept_key
+    UNION
+    SELECT concept_key, ancestor FROM anchored
+),
+closures AS (
+    SELECT
+        c.concept_key,
+        list(DISTINCT c.id ORDER BY c.id) AS ids,
+        coalesce(list(DISTINCT n.name ORDER BY n.name) FILTER (WHERE nullif(trim(n.name), '') IS NOT NULL), [])
+            AS labels
+    FROM closure_ids c
+    LEFT JOIN search_nodes n ON n.id = c.id
+    GROUP BY c.concept_key
+),
 kg AS (
     SELECT
         upper(split_part(id, ':', 1)) || substr(id, position(':' IN id)) AS concept_key,
@@ -86,9 +121,12 @@ SELECT
                  ORDER BY v.variable_name)
      FROM carriers v WHERE v.concept_key = k.concept_key) AS "variables",
     any_value(l.id) AS "kgNodeId",
-    any_value(l.category) AS "kgCategory"
+    any_value(l.category) AS "kgCategory",
+    any_value(cl.ids) AS "closure",
+    any_value(cl.labels) AS "closureLabel"
 FROM classed k
 LEFT JOIN kg l ON l.concept_key = k.concept_key
+LEFT JOIN closures cl ON cl.concept_key = k.concept_key
 GROUP BY k.concept_key
 HAVING "studyCount" > 0
 ORDER BY "conceptType"

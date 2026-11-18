@@ -90,14 +90,26 @@ index. The `/bdc` routes serve them in the middleware's own index format, so its
 `HARMONIZED_INDEX` can point at `/bdc/harmonized-index.json` instead of its bundled file, and
 `/search` and `/autocomplete` hits carry the same `bdc` coverage the middleware computes.
 
+Each concept carries a `closure`: its code, the KG nodes it is or maps to by exactMatch, and
+every superclass of those (`rdfs:subClassOf`), with their labels in `closureLabel`.
+`?closure=MONDO:0004995` on `/bdc/concepts` returns every concept under cardiovascular
+disease. Text search matches closure labels too, after the middleware's own matches:
+`q=cardiovascular` finds hypertension through its superclass "cardiovascular disorder".
+
+`/bdc/words` completes single words rather than finding entities: the vocabulary
+(`sql/search_words.sql`) is the words of KG labels plus, with the `varlib` schema, the words of
+variable descriptions and value labels, ranked by BDC use first and KG use second.
+
 | route | parameters |
 |---|---|
 | `GET /v3/api/autocomplete` | `q` (top 10) |
 | `GET /v3/api/search` | `q` (default `*:*`), `category` (repeatable), `limit` (0-500, default 20), and either `offset` (offset + limit ≤ 10,000) or `cursor` (`*`, then each response's `next_cursor`, for any depth) |
 | `GET /v3/api/entity/{id}` | node fields only; no associations or hierarchy yet |
 | `GET /bdc/harmonized-index.json` | the harmonized concepts in bdc-dp-middleware's index format (schemaVersion 2) |
-| `GET /bdc/concepts` | `q` (text, or a CURIE for an exact lookup), `limit` (default 25) |
+| `GET /bdc/concepts` | `q` (text, or a CURIE for an exact lookup), `closure` (a KG term: only concepts under it; `q` then optional), `limit` (default 25) |
 | `GET /bdc/concepts/{curie}` | one harmonized concept |
+| `GET /bdc/words` | `prefix` (its last word is completed), `limit` (0-100, default 10), `fuzzy` (also words one typo away) |
+| `GET /docs`, `/openapi.json` | interactive docs and the OpenAPI description |
 | `GET /health/live`, `/health/ready` | probes |
 
 ```bash
@@ -116,8 +128,11 @@ blanked in both exports ([ADR 3](docs/adr/0003-blank-restricted-labels-at-export
 
 Cursor pages report `offset: 0`: a cursor walk has no offset, so count pages client-side.
 
-Set `BDC_SEARCH_API_KEY` and every route except `/health/live` and `/health/ready` requires the
+`/docs` is an interactive page for every route (Swagger UI over `/openapi.json`).
+
+Set `BDC_SEARCH_API_KEY` and every route except the health probes and the docs requires the
 key, sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`; without it, the API is open.
+On `/docs`, enter the key once under **Authorize**.
 
 ```sh
 BDC_SEARCH_API_KEY=… just search-serve

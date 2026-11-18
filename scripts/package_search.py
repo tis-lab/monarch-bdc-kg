@@ -55,6 +55,7 @@ def package(index_dir: Path, out_dir: Path, kg_release: str, kg_db: Path, info: 
             "index_version": info.get("index_version"),
             "entities": info.get("entities"),
             "concepts": info.get("concepts"),
+            "words": info.get("words"),
         },
     }
     (index_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

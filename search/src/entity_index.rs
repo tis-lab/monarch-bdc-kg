@@ -133,7 +133,7 @@ pub fn write_entities(
 }
 
 /// One hit: the stored entity in Monarch's SearchResult shape.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SearchResult {
     #[serde(flatten)]
     pub entity: Entity,
@@ -145,7 +145,7 @@ pub struct SearchResult {
 
 /// Monarch's SearchResults envelope, plus `next_cursor` for cursor paging (Monarch clients
 /// ignore it).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SearchResults {
     pub limit: usize,
     /// The offset asked for; 0 for cursor pages, which have no offset.

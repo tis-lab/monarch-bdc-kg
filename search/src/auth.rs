@@ -1,13 +1,13 @@
 //! Optional API-key access control.
 //!
-//! With `BDC_SEARCH_API_KEY` set, every route except the health probes needs the key, sent as
-//! either header:
+//! With `BDC_SEARCH_API_KEY` set, every route except the health probes and the docs (`/docs`,
+//! `/openapi.json`) needs the key, sent as either header:
 //!
 //!   X-API-Key: <key>
 //!   Authorization: Bearer <key>
 //!
 //! Without it, the API is open. The probes stay open either way, so the cluster can check the
-//! pod without knowing the key.
+//! pod without knowing the key; so do the docs, so people can read them before they have one.
 
 use std::sync::Arc;
 

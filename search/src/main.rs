@@ -22,8 +22,10 @@ mod concepts;
 mod entity_index;
 mod http;
 mod monarch;
+mod openapi;
 mod readonly;
 mod schema;
+mod words;
 
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -38,6 +40,7 @@ use auth::ApiKey;
 use concepts::HarmonizedConcepts;
 use entity_index::EntityIndex;
 use http::App;
+use words::Words;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -156,6 +159,14 @@ fn open(index_dir: &Path) -> Result<App> {
             concepts::CONCEPTS_FILE
         ),
     }
+    let words = Words::open(index_dir)?.map(Arc::new);
+    match &words {
+        Some(w) => tracing::info!(words = w.len(), "word list loaded"),
+        None => tracing::warn!(
+            "no {} in the index directory; /bdc/words returns 404",
+            words::WORDS_FILE
+        ),
+    }
     let release = match std::fs::read_to_string(index_dir.join(RELEASE_MANIFEST)) {
         Ok(text) => Some(Arc::new(serde_json::from_str(&text)?)),
         Err(_) => None,
@@ -163,6 +174,7 @@ fn open(index_dir: &Path) -> Result<App> {
     Ok(App {
         entities,
         concepts,
+        words,
         release,
     })
 }
