@@ -24,11 +24,12 @@ spec:
             - name: BDC_SEARCH_API_KEY
               valueFrom:
                 secretKeyRef: {name: bdc-search, key: api-key}
-          # The index is memory-mapped: the process stays small (~20 MB) and the rest is
-          # reclaimable page cache.
+          # Measured on Cloud Apps (2026-11-17, 60 s at 32 concurrent clients, 0 errors): the
+          # container peaked at 44 Mi. The index is memory-mapped from the image, and reads of
+          # image files aren't charged to the pod, so memory doesn't grow with the index.
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {cpu: "1", memory: 1Gi}
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 300Mi}
           readinessProbe:
             httpGet: {path: /health/ready, port: 8080}
             periodSeconds: 10
