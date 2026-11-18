@@ -5,6 +5,8 @@ Writes, into OUT_DIR:
   concepts.jsonl       one harmonized concept per CURIE (sql/search_concept.sql), when the
                        duckdb has the varlib schema (`just varlib`)
   concepts-meta.json   the HV commit and date the concepts were built from
+  words.jsonl          the /bdc/words vocabulary (sql/search_words.sql): KG label words, plus
+                       variable library words when the duckdb has its lexicon
 
 Both SQL files read `search_nodes`, a view this script defines over `nodes` with every label
 column (name, synonyms, description, ...) of restricted sources blanked. The sources are a
@@ -74,7 +76,7 @@ def export_json(con: duckdb.DuckDBPyConnection, sql_file: Path, out: Path):
 
 
 # The varlib tables the concept export reads; a partial load (interrupted, or older) is skipped.
-VARLIB_TABLES = ["concept", "concept_source", "load_manifest"]
+VARLIB_TABLES = ["concept", "concept_source", "load_manifest", "concept_anchor"]
 
 
 def has_varlib(con: duckdb.DuckDBPyConnection) -> bool:
@@ -83,6 +85,20 @@ def has_varlib(con: duckdb.DuckDBPyConnection) -> bool:
         [VARLIB_TABLES],
     ).fetchone()[0]
     return found == len(VARLIB_TABLES)
+
+
+def define_bdc_word(con: duckdb.DuckDBPyConnection, varlib: bool):
+    """`bdc_word`: the variable library's words (varlib.lexicon_word), or none without it."""
+    lexicon = varlib and con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'varlib' AND table_name = 'lexicon_word'"
+    ).fetchone()[0]
+    source = (
+        "SELECT word, variable_freq, concept_freq, term_kinds FROM varlib.lexicon_word"
+        if lexicon
+        else "SELECT NULL::VARCHAR AS word, 0::BIGINT AS variable_freq, 0::BIGINT AS concept_freq, "
+        "[]::VARCHAR[] AS term_kinds WHERE false"
+    )
+    con.execute(f"CREATE OR REPLACE TEMP VIEW bdc_word AS {source}")
 
 
 def concepts_meta(con: duckdb.DuckDBPyConnection) -> dict:
@@ -116,7 +132,10 @@ def main():
     define_search_nodes(con, restricted_sources(args.config))
 
     export_json(con, ROOT / "sql" / "search_entity.sql", args.out_dir / "entities.jsonl")
-    if has_varlib(con):
+    varlib = has_varlib(con)
+    define_bdc_word(con, varlib)
+    export_json(con, ROOT / "sql" / "search_words.sql", args.out_dir / "words.jsonl")
+    if varlib:
         export_json(con, ROOT / "sql" / "search_concept.sql", args.out_dir / "concepts.jsonl")
         (args.out_dir / "concepts-meta.json").write_text(json.dumps(concepts_meta(con)))
     else:

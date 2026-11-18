@@ -17,12 +17,15 @@
 //!   readonly.rs      serving an index from a read-only filesystem
 
 mod analysis;
+mod auth;
 mod concepts;
 mod entity_index;
 mod http;
 mod monarch;
+mod openapi;
 mod readonly;
 mod schema;
+mod words;
 
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -33,9 +36,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use auth::ApiKey;
 use concepts::HarmonizedConcepts;
 use entity_index::EntityIndex;
 use http::App;
+use words::Words;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -64,6 +69,9 @@ enum Command {
         index_dir: PathBuf,
         #[arg(long, env = "BIND", default_value = "0.0.0.0:8080")]
         bind: SocketAddr,
+        /// Require this key on every route but the health probes (X-API-Key or Bearer)
+        #[arg(long, env = "BDC_SEARCH_API_KEY", hide_env_values = true)]
+        api_key: Option<String>,
     },
     /// Print what an index directory holds, as /version reports it (for release manifests)
     Info {
@@ -118,11 +126,16 @@ async fn main() -> Result<()> {
             let results = app.with_coverage(app.entities.autocomplete(&q)?);
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        Command::Serve { index_dir, bind } => {
+        Command::Serve {
+            index_dir,
+            bind,
+            api_key,
+        } => {
             let app = open(&index_dir)?;
+            let api_key = api_key.as_deref().map(ApiKey::new).transpose()?;
             let listener = tokio::net::TcpListener::bind(bind).await?;
-            tracing::info!(%bind, "listening");
-            axum::serve(listener, http::router(app))
+            tracing::info!(%bind, api_key_required = api_key.is_some(), "listening");
+            axum::serve(listener, http::router(app, api_key))
                 .with_graceful_shutdown(http::shutdown_signal())
                 .await?;
         }
@@ -146,6 +159,14 @@ fn open(index_dir: &Path) -> Result<App> {
             concepts::CONCEPTS_FILE
         ),
     }
+    let words = Words::open(index_dir)?.map(Arc::new);
+    match &words {
+        Some(w) => tracing::info!(words = w.len(), "word list loaded"),
+        None => tracing::warn!(
+            "no {} in the index directory; /bdc/words returns 404",
+            words::WORDS_FILE
+        ),
+    }
     let release = match std::fs::read_to_string(index_dir.join(RELEASE_MANIFEST)) {
         Ok(text) => Some(Arc::new(serde_json::from_str(&text)?)),
         Err(_) => None,
@@ -153,6 +174,7 @@ fn open(index_dir: &Path) -> Result<App> {
     Ok(App {
         entities,
         concepts,
+        words,
         release,
     })
 }

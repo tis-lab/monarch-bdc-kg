@@ -10,7 +10,8 @@ spec = importlib.util.spec_from_file_location("package_search", ROOT / "scripts"
 package_search = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package_search)
 
-INFO = {"bdc_search": "0.1.0", "schema_version": 2, "index_version": "abc123", "entities": 3, "concepts": 2}
+INFO = {"bdc_search": "0.1.0", "schema_version": 2, "index_version": "abc123", "entities": 3, "concepts": 2,
+        "words": 5}
 
 
 def test_a_release_packages_the_index_with_its_manifest(tmp_path):
@@ -25,7 +26,8 @@ def test_a_release_packages_the_index_with_its_manifest(tmp_path):
 
     assert published["kg_release"] == "2026-11-13"
     assert published["hv_revision"] == "3260ff3"
-    assert published["index"] == {"schema_version": 2, "index_version": "abc123", "entities": 3, "concepts": 2}
+    assert published["index"] == {"schema_version": 2, "index_version": "abc123", "entities": 3, "concepts": 2,
+        "words": 5}
     assert published["tantivy"], "read from search/Cargo.lock"
     assert published["artifact"]["sha256"] == package_search.sha256(tmp_path / "out" / "index.tar.gz")
 

@@ -36,6 +36,8 @@ CREATE TABLE varlib.concept (id VARCHAR, code VARCHAR, slot_name VARCHAR, catego
 CREATE TABLE varlib.concept_source (concept_id VARCHAR, cohort VARCHAR, source_file VARCHAR);
 CREATE TABLE varlib.load_manifest (input VARCHAR, path VARCHAR, repo VARCHAR, commit VARCHAR, sha256 VARCHAR,
     row_count BIGINT, loaded_at TIMESTAMP DEFAULT current_timestamp);
+CREATE TABLE varlib.concept_anchor (concept_id VARCHAR, node_id VARCHAR);
+CREATE TABLE closure (subject_id VARCHAR, predicate_id VARCHAR, object_id VARCHAR);
 """
 
 
@@ -127,6 +129,35 @@ def test_studies_without_a_spec_file_still_count(con, tmp_path):
     assert [v["variableName"] for v in row["variables"]] == ["a"]
 
 
+def test_closure_holds_the_code_its_anchors_and_their_superclasses(con, tmp_path):
+    con.execute(VARLIB)
+    concept(con, "bdcvl:a", "OMOP:1", "MeasurementObservation", ("ARIC", "ARIC-ingest/a.yaml"))
+    concept(con, "bdcvl:b", "MONDO:2", "Condition", ("JHS", "JHS-ingest/b.yaml"))
+    con.execute("""INSERT INTO varlib.concept_anchor VALUES
+        ('bdcvl:a', 'LOINC:9'), ('bdcvl:b', 'MONDO:2'), ('bdcvl:b', NULL)""")
+    con.execute("""INSERT INTO closure VALUES
+        ('MONDO:2', 'rdfs:subClassOf', 'MONDO:2'), ('MONDO:2', 'rdfs:subClassOf', 'MONDO:1'),
+        ('MONDO:2', 'BFO:0000050', 'UBERON:1')""")
+    concepts = export(con, tmp_path, "search_concept")
+    assert concepts["OMOP:1"]["closure"] == ["LOINC:9", "OMOP:1"], "an anchor without hierarchy still counts"
+    assert concepts["MONDO:2"]["closure"] == ["MONDO:1", "MONDO:2"], "subclass only, not part-of"
+
+
+def test_closure_labels_come_from_the_kg_and_respect_restricted_sources(con, tmp_path):
+    node(con, "MONDO:1", "biolink:Disease", "cardiovascular disorder")
+    node(con, "MONDO:2", "biolink:Disease", "hypertensive disorder")
+    node(con, "SNOMEDCT:3", "biolink:Disease", "licensed label", provided_by=RESTRICTED)
+    con.execute(VARLIB)
+    concept(con, "bdcvl:b", "MONDO:2", "Condition", ("JHS", "JHS-ingest/b.yaml"))
+    con.execute("INSERT INTO varlib.concept_anchor VALUES ('bdcvl:b', 'MONDO:2')")
+    con.execute("""INSERT INTO closure VALUES
+        ('MONDO:2', 'rdfs:subClassOf', 'MONDO:2'), ('MONDO:2', 'rdfs:subClassOf', 'MONDO:1'),
+        ('MONDO:2', 'rdfs:subClassOf', 'SNOMEDCT:3')""")
+    row = export(con, tmp_path, "search_concept")["MONDO:2"]
+    assert row["closure"] == ["MONDO:1", "MONDO:2", "SNOMEDCT:3"]
+    assert row["closureLabel"] == ["cardiovascular disorder", "hypertensive disorder"]
+
+
 def test_a_partial_varlib_schema_is_skipped(con):
     con.execute("CREATE SCHEMA varlib; CREATE TABLE varlib.concept (id VARCHAR)")
     assert not export_search.has_varlib(con)
@@ -142,3 +173,53 @@ def test_the_controlled_access_deployment_blanks_nothing(con, tmp_path):
     out = tmp_path / "entities.jsonl"
     export_search.export_json(con, ROOT / "sql" / "search_entity.sql", out)
     assert json.loads(out.read_text())["name"] == "licensed label"
+
+
+def words(con, tmp_path):
+    export_search.define_bdc_word(con, export_search.has_varlib(con))
+    out = tmp_path / "words.jsonl"
+    export_search.export_json(con, ROOT / "sql" / "search_words.sql", out)
+    return {row["word"]: row for row in map(json.loads, out.read_text().splitlines())}
+
+
+LEXICON = """
+    CREATE SCHEMA varlib;
+    CREATE TABLE varlib.concept (id VARCHAR);
+    CREATE TABLE varlib.concept_source (id VARCHAR);
+    CREATE TABLE varlib.load_manifest (id VARCHAR);
+    CREATE TABLE varlib.concept_anchor (id VARCHAR);
+    CREATE TABLE varlib.lexicon_word (word VARCHAR, variable_freq BIGINT, concept_freq BIGINT,
+        term_kinds VARCHAR[]);
+"""
+
+
+def test_words_come_from_kg_labels_in_two_or_more_nodes(con, tmp_path):
+    node(con, "MONDO:1", "biolink:Disease", "pulmonary hypertension")
+    node(con, "MONDO:2", "biolink:Disease", "pulmonary embolism", synonym=["lung clot"])
+    node(con, "MGI:1", "biolink:Gene", "pulmonary mouse gene", in_taxon="NCBITaxon:10090")
+    export_search.define_search_nodes(con, [])
+    found = words(con, tmp_path)
+    assert set(found) == {"pulmonary"}, "one-label words and other species' labels stay out"
+    assert found["pulmonary"]["kg_nodes"] == 2
+
+
+def test_variable_text_words_join_kg_words_and_codes_stay_out(con, tmp_path):
+    node(con, "MONDO:1", "biolink:Disease", "hypertension")
+    con.execute(LEXICON)
+    con.execute("""INSERT INTO varlib.lexicon_word VALUES
+        ('hypertension', 33, 2, ['anchor_label', 'variable_description']),
+        ('hypert01', 1, 0, ['variable_description']),
+        ('diastolic', 4, 0, ['variable_description']),
+        ('the', 9, 0, ['variable_description'])""")
+    export_search.define_search_nodes(con, [])
+    found = words(con, tmp_path)
+    assert set(found) == {"hypertension", "diastolic"}
+    assert (found["hypertension"]["variables"], found["hypertension"]["kg_nodes"]) == (33, 1)
+
+
+def test_a_word_only_a_restricted_label_uses_stays_out(con, tmp_path):
+    node(con, "SNOMEDCT:1", "biolink:Procedure", "licensedword", provided_by=RESTRICTED)
+    con.execute(LEXICON)
+    con.execute("INSERT INTO varlib.lexicon_word VALUES ('licensedword', 0, 1, ['anchor_label'])")
+    export_search.define_search_nodes(con, [RESTRICTED])
+    assert words(con, tmp_path) == {}

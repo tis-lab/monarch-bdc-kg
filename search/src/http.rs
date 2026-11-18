@@ -13,20 +13,27 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{header, StatusCode};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
+use crate::auth::{self, ApiKey};
+use crate::concepts::Concept;
 use crate::concepts::{HarmonizedConcepts, DEFAULT_MAX_MATCHES};
 use crate::entity_index::{CursorError, EntityIndex, Page, SearchRequest, SearchResults};
 use crate::monarch;
+use crate::openapi::{self, ConceptPage, Invalid, InvalidParam, NotFound};
+use crate::schema::Entity;
+use crate::words::{self, Completions, Words};
 
 /// What the handlers share. Both indexes are read-only for the life of the process.
 #[derive(Clone)]
 pub struct App {
     pub entities: Arc<EntityIndex>,
     pub concepts: Option<Arc<HarmonizedConcepts>>,
+    pub words: Option<Arc<Words>>,
     /// The release manifest packaged with the index (`manifest.json`), when there is one.
     pub release: Option<Arc<serde_json::Value>>,
 }
@@ -40,6 +47,7 @@ impl App {
             "index_version": self.entities.version(),
             "entities": self.entities.num_docs(),
             "concepts": self.concepts.as_ref().map(|c| c.len()),
+            "words": self.words.as_ref().map(|w| w.len()),
             "release": self.release.as_deref(),
         })
     }
@@ -55,21 +63,31 @@ impl App {
     }
 }
 
-pub fn router(app: App) -> Router {
-    Router::new()
+/// The routes. With an `api_key`, all but the health probes require it (see auth.rs).
+pub fn router(app: App, api_key: Option<ApiKey>) -> Router {
+    let api = Router::new()
         .route("/v3/api/autocomplete", get(autocomplete))
         .route("/v3/api/search", get(search))
         .route("/v3/api/entity/{id}", get(entity))
         .route("/bdc/harmonized-index.json", get(harmonized_index))
         .route("/bdc/concepts", get(search_concepts))
         .route("/bdc/concepts/{curie}", get(concept))
-        // The indexes open before the listener binds, so serving at all means ready.
-        .route("/health/live", get(|| async { "ok" }))
-        .route("/health/ready", get(|| async { "ok" }))
+        .route("/bdc/words", get(words))
         .route(
             "/version",
             get(|State(app): State<App>| async move { Json(app.info()) }),
-        )
+        );
+    let api_key_required = api_key.is_some();
+    let api = match api_key {
+        Some(key) => api.layer(middleware::from_fn_with_state(key, auth::require_api_key)),
+        None => api,
+    };
+    // Added after the key layer, so they stay open: the probes, and the docs (calls made from
+    // the docs page still need the key).
+    // The indexes open before the listener binds, so serving at all means ready.
+    api.merge(openapi::docs(api_key_required))
+        .route("/health/live", get(|| async { "ok" }))
+        .route("/health/ready", get(|| async { "ok" }))
         .with_state(app)
 }
 
@@ -99,7 +117,11 @@ pub async fn shutdown_signal() {
 
 // ── handlers ───────────────────────────────────────────────────────────────
 
-async fn autocomplete(
+#[utoipa::path(get, path = "/v3/api/autocomplete", tag = "Monarch",
+    description = "Monarch's autocomplete: the top 10 entities whose name, symbol or synonyms start with the query's words.",
+    params(("q" = String, Query, description = "Search text", example = "pulmonary hyper")),
+    responses((status = 200, body = SearchResults), (status = 422, body = Invalid)))]
+pub(crate) async fn autocomplete(
     State(app): State<App>,
     RawQuery(raw): RawQuery,
 ) -> Result<Response, ApiError> {
@@ -112,7 +134,20 @@ async fn autocomplete(
     Ok(Json(app.with_coverage(results)).into_response())
 }
 
-async fn search(State(app): State<App>, RawQuery(raw): RawQuery) -> Result<Response, ApiError> {
+#[utoipa::path(get, path = "/v3/api/search", tag = "Monarch",
+    description = "Monarch's entity search, ranked as Monarch ranks it. Page with `limit` + `offset` (up to 10,000 deep), or start a cursor walk with `cursor=*` and pass each response's `next_cursor` back as `cursor`.",
+    params(
+        ("q" = Option<String>, Query, description = "Search text; leave out to list everything", example = "asthma"),
+        ("category" = Option<Vec<String>>, Query, description = "Biolink categories to keep (repeat for several)", example = json!(["biolink:Disease"])),
+        ("limit" = Option<usize>, Query, description = "Hits per page, 0-500", example = 20),
+        ("offset" = Option<usize>, Query, description = "Hits to skip; offset + limit at most 10,000"),
+        ("cursor" = Option<String>, Query, description = "`*` to start a cursor walk, then the previous page's `next_cursor`"),
+    ),
+    responses((status = 200, body = SearchResults), (status = 422, body = Invalid)))]
+pub(crate) async fn search(
+    State(app): State<App>,
+    RawQuery(raw): RawQuery,
+) -> Result<Response, ApiError> {
     let params = Params::parse(raw);
     let q = params.one("q").unwrap_or(monarch::MATCH_ALL).to_owned();
     let categories = params.all("category");
@@ -179,7 +214,14 @@ fn page(
     }
 }
 
-async fn entity(State(app): State<App>, Path(id): Path<String>) -> Result<Response, ApiError> {
+#[utoipa::path(get, path = "/v3/api/entity/{id}", tag = "Monarch",
+    description = "One entity by id, as the search index stores it.",
+    params(("id" = String, Path, description = "Entity CURIE", example = "MONDO:0005044")),
+    responses((status = 200, body = Entity), (status = 404, body = NotFound)))]
+pub(crate) async fn entity(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
     let found = blocking(move || Ok(app.entities.entity(&id)?)).await?;
     match found {
         Some(entity) => Ok(Json(entity).into_response()),
@@ -189,7 +231,10 @@ async fn entity(State(app): State<App>, Path(id): Path<String>) -> Result<Respon
 
 /// All concepts in the middleware's harmonized-index format, so it can load this URL in place
 /// of its bundled file (HARMONIZED_INDEX=http://.../bdc/harmonized-index.json).
-async fn harmonized_index(State(app): State<App>) -> Result<Response, ApiError> {
+#[utoipa::path(get, path = "/bdc/harmonized-index.json", tag = "BDC",
+    description = "Every harmonized concept in the portal middleware's harmonized-index format (schemaVersion 2).",
+    responses((status = 200, description = "The harmonized index", content_type = "application/json"), (status = 404, body = NotFound)))]
+pub(crate) async fn harmonized_index(State(app): State<App>) -> Result<Response, ApiError> {
     let concepts = app.concepts.ok_or(ApiError::NotFound("Harmonized index"))?;
     // Bytes clone is a reference-count bump, not a copy of the document.
     let body = concepts.index_json();
@@ -197,27 +242,73 @@ async fn harmonized_index(State(app): State<App>) -> Result<Response, ApiError> 
 }
 
 /// Harmonized concepts matching `q`, by the middleware's rules, most studies first.
-async fn search_concepts(
+#[utoipa::path(get, path = "/bdc/concepts", tag = "BDC",
+    description = "Harmonized concepts matching the query by the middleware's rules, most studies first. With `closure`, only concepts under that KG term (the term itself or a subclass); `q` is then optional.",
+    params(
+        ("q" = Option<String>, Query, description = "Search text, or a CURIE for an exact lookup; required without `closure`", example = "hypertension"),
+        ("closure" = Option<String>, Query, description = "A KG term: keep concepts under it", example = "MONDO:0004995"),
+        ("limit" = Option<usize>, Query, description = "Concepts to return, 0-500 (default 25)"),
+    ),
+    responses((status = 200, body = ConceptPage), (status = 422, body = Invalid), (status = 404, body = NotFound)))]
+pub(crate) async fn search_concepts(
     State(app): State<App>,
     RawQuery(raw): RawQuery,
 ) -> Result<Response, ApiError> {
     let params = Params::parse(raw);
-    let q = params.required_text("q")?;
+    let closure = match params.one("closure") {
+        Some(_) => Some(params.required_text("closure")?),
+        None => None,
+    };
+    let q = match (&closure, params.one("q")) {
+        (Some(_), None) => None,
+        _ => Some(params.required_text("q")?),
+    };
     let limit = params.count("limit", DEFAULT_MAX_MATCHES, Some(monarch::MAX_LIMIT))?;
     let concepts = app.concepts.ok_or(ApiError::NotFound("Harmonized index"))?;
-    let body = blocking(move || {
-        let matches = concepts.search(&q, limit);
-        Ok(json!({ "total": matches.total, "limit": limit, "items": matches.items }))
+    blocking(move || {
+        let matches = concepts.search(q.as_deref(), closure.as_deref(), limit);
+        let page = ConceptPage {
+            total: matches.total,
+            limit,
+            items: matches.items,
+        };
+        Ok(Json(page).into_response())
     })
-    .await?;
-    Ok(Json(body).into_response())
+    .await
 }
 
-async fn concept(State(app): State<App>, Path(curie): Path<String>) -> Result<Response, ApiError> {
+#[utoipa::path(get, path = "/bdc/concepts/{curie}", tag = "BDC",
+    description = "One harmonized concept by its code.",
+    params(("curie" = String, Path, description = "Concept CURIE", example = "MONDO:0005044")),
+    responses((status = 200, body = Concept), (status = 404, body = NotFound)))]
+pub(crate) async fn concept(
+    State(app): State<App>,
+    Path(curie): Path<String>,
+) -> Result<Response, ApiError> {
     let found = app.concepts.as_ref().and_then(|c| c.get(&curie).cloned());
     found
         .map(|c| Json(c).into_response())
         .ok_or(ApiError::NotFound("Concept"))
+}
+
+#[utoipa::path(get, path = "/bdc/words", tag = "BDC",
+    description = "Completes the word being typed (the last word of `prefix`) from the words of KG labels and BDC variable and concept text. Words BDC text uses come first.",
+    params(
+        ("prefix" = String, Query, description = "Text typed so far; its last word is completed", example = "pulmonary hyp"),
+        ("limit" = Option<usize>, Query, description = "Completions to return, 0-100 (default 10)"),
+        ("fuzzy" = Option<bool>, Query, description = "Also complete words one typo away (prefixes of 4+ letters)"),
+    ),
+    responses((status = 200, body = Completions), (status = 422, body = Invalid), (status = 404, body = NotFound)))]
+pub(crate) async fn words(
+    State(app): State<App>,
+    RawQuery(raw): RawQuery,
+) -> Result<Response, ApiError> {
+    let params = Params::parse(raw);
+    let prefix = params.required_text("prefix")?;
+    let limit = params.count("limit", words::DEFAULT_LIMIT, Some(words::MAX_LIMIT))?;
+    let fuzzy = params.flag("fuzzy", false)?;
+    let vocabulary = app.words.ok_or(ApiError::NotFound("Word list"))?;
+    blocking(move || Ok(Json(vocabulary.complete(&prefix, limit, fuzzy)?).into_response())).await
 }
 
 /// Run `f` on tokio's blocking thread pool: tantivy queries and the concept scan are
@@ -273,6 +364,22 @@ impl Params {
         }
     }
 
+    /// A true/false parameter, read as pydantic reads a bool.
+    fn flag(&self, key: &'static str, default: bool) -> Result<bool, ApiError> {
+        let Some(raw) = self.one(key) else {
+            return Ok(default);
+        };
+        match raw.trim().to_lowercase().as_str() {
+            "true" | "t" | "yes" | "y" | "on" | "1" => Ok(true),
+            "false" | "f" | "no" | "n" | "off" | "0" => Ok(false),
+            _ => Err(ApiError::invalid(
+                key,
+                raw,
+                "Input should be a valid boolean, unable to interpret input",
+            )),
+        }
+    }
+
     /// A non-negative integer parameter, with FastAPI's messages when it isn't one.
     fn count(
         &self,
@@ -312,7 +419,7 @@ impl Params {
 
 /// Every way a request can fail, and the response each gets.
 #[derive(Debug)]
-enum ApiError {
+pub(crate) enum ApiError {
     /// 422: a query parameter is missing or not acceptable.
     Invalid {
         key: &'static str,
@@ -346,16 +453,18 @@ impl IntoResponse for ApiError {
         match self {
             // FastAPI's shape for an invalid query parameter.
             ApiError::Invalid { key, input, msg } => {
-                let detail = json!([{ "loc": ["query", key], "msg": msg, "input": input }]);
-                (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({ "detail": detail })),
-                )
-                    .into_response()
+                let detail = vec![InvalidParam {
+                    loc: vec!["query".into(), key.into()],
+                    msg,
+                    input,
+                }];
+                (StatusCode::UNPROCESSABLE_ENTITY, Json(Invalid { detail })).into_response()
             }
             ApiError::NotFound(what) => (
                 StatusCode::NOT_FOUND,
-                Json(json!({ "detail": format!("{what} not found") })),
+                Json(NotFound {
+                    detail: format!("{what} not found"),
+                }),
             )
                 .into_response(),
             ApiError::Internal(e) => {
@@ -371,7 +480,7 @@ impl IntoResponse for ApiError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::concepts::tests::sample;
     use crate::entity_index::tests::{entity, index_of};
@@ -380,7 +489,7 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
 
-    fn app() -> App {
+    pub(crate) fn app() -> App {
         let mut entities: Vec<_> = (0..30)
             .map(|i| {
                 entity(
@@ -406,6 +515,7 @@ mod tests {
         App {
             entities: Arc::new(index_of(entities)),
             concepts: Some(Arc::new(sample())),
+            words: Some(Arc::new(crate::words::tests::sample())),
             release: None,
         }
     }
@@ -414,7 +524,7 @@ mod tests {
     /// index they came from, so a cursor walk must reuse one app.
     async fn get_from(app: &App, uri: &str) -> (StatusCode, Value) {
         let request = Request::get(uri).body(Body::empty()).unwrap();
-        let response = router(app.clone()).oneshot(request).await.unwrap();
+        let response = router(app.clone(), None).oneshot(request).await.unwrap();
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, serde_json::from_slice(&body).unwrap())
@@ -438,6 +548,52 @@ mod tests {
         let (status, body) = get("/v3/api/autocomplete?q=").await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["detail"][0]["loc"], json!(["query", "q"]));
+    }
+
+    #[tokio::test]
+    async fn concepts_can_be_kept_to_those_under_a_term() {
+        let (status, body) = get("/bdc/concepts?closure=MONDO:0000001").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total"], 2, "no q needed with closure");
+        let (_, body) = get("/bdc/concepts?closure=MONDO:0005044&q=pulmonary").await;
+        assert_eq!(body["items"][0]["conceptType"], "MONDO:0005149");
+        assert_eq!(body["total"], 1);
+        let (status, body) = get("/bdc/concepts?closure=").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["detail"][0]["loc"], json!(["query", "closure"]));
+        let (status, _) = get("/bdc/concepts").await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "q or closure is required"
+        );
+    }
+
+    #[tokio::test]
+    async fn words_complete_the_last_word_typed() {
+        let (status, body) = get("/bdc/words?prefix=pulmonary%20hyp&limit=2").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["prefix"], "hyp");
+        assert_eq!(body["items"][0]["word"], "hypertension");
+        assert_eq!(body["items"][0]["variables"], 33);
+        assert_eq!(body["items"].as_array().unwrap().len(), 2);
+        let (_, body) = get("/bdc/words?prefix=astma&fuzzy=true").await;
+        assert_eq!(body["items"][0]["word"], "asthma");
+        assert_eq!(body["items"][0]["fuzzy"], true);
+    }
+
+    #[tokio::test]
+    async fn words_parameters_follow_fastapi_rules() {
+        let (status, body) = get("/bdc/words").await;
+        assert_eq!(
+            (status, message(&body)),
+            (StatusCode::UNPROCESSABLE_ENTITY, "Field required")
+        );
+        let (status, body) = get("/bdc/words?prefix=hyp&fuzzy=maybe").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["detail"][0]["loc"], json!(["query", "fuzzy"]));
+        let (status, _) = get("/bdc/words?prefix=hyp&limit=101").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use axum::body::Bytes;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// File names inside the index directory, written by scripts/export_search.py.
 pub const CONCEPTS_FILE: &str = "concepts.jsonl";
@@ -22,7 +23,7 @@ const MIN_PREFIX_LENGTH: usize = 5;
 pub const DEFAULT_MAX_MATCHES: usize = 25;
 
 /// One study's spec assigning the concept: the middleware's `SourceMapping`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceMapping {
     pub study: String,
@@ -33,7 +34,7 @@ pub struct SourceMapping {
 
 /// A carrier: a spec file (by name) that assigns the concept, and in which studies. The
 /// middleware's `BdcCarrier`, which its index calls a "variable" (`variableName` = file stem).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Carrier {
     pub variable_name: String,
@@ -42,7 +43,7 @@ pub struct Carrier {
 }
 
 /// One harmonized concept. Field names on the wire are the middleware's (`conceptType`, ...).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Concept {
     /// The concept code, e.g. MONDO:0005044.
@@ -64,10 +65,17 @@ pub struct Concept {
     pub kg_node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kg_category: Option<String>,
+    /// The concept code, the KG nodes it is or maps to, and every superclass of those: the
+    /// terms the concept is under. Sorted. Computed in sql/search_concept.sql.
+    #[serde(default)]
+    pub closure: Vec<String>,
+    /// The labels of `closure`'s terms, where the KG has one. Sorted.
+    #[serde(default)]
+    pub closure_label: Vec<String>,
 }
 
 /// What BDC has harmonized for one KG term: the middleware's `BdcCoverage`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Coverage {
     pub study_count: usize,
@@ -93,7 +101,11 @@ pub struct HarmonizedConcepts {
     concepts: Vec<Concept>,
     /// Each concept's searchable words, parallel to `concepts`.
     words: Vec<HashSet<String>>,
+    /// The words of each concept's closure labels, parallel to `concepts`.
+    closure_words: Vec<HashSet<String>>,
     by_key: HashMap<String, usize>,
+    /// Each term in some concept's closure (by concept key), to those concepts, in search order.
+    by_ancestor: HashMap<String, Vec<usize>>,
     /// `/bdc/harmonized-index.json`, built once since the concepts never change while served.
     index_json: Bytes,
 }
@@ -161,6 +173,10 @@ impl HarmonizedConcepts {
                 .cmp(&a.study_count)
                 .then_with(|| a.curie.cmp(&b.curie))
         });
+        let closure_words = concepts
+            .iter()
+            .map(|c| c.closure_label.iter().flat_map(|l| words(l)).collect())
+            .collect();
         // The middleware searches spec file names and their labels; the KG label is added here.
         let words = concepts
             .iter()
@@ -179,11 +195,22 @@ impl HarmonizedConcepts {
             .enumerate()
             .map(|(i, c)| (concept_key(&c.curie), i))
             .collect();
+        let mut by_ancestor: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, c) in concepts.iter().enumerate() {
+            for ancestor in &c.closure {
+                by_ancestor
+                    .entry(concept_key(ancestor))
+                    .or_default()
+                    .push(i);
+            }
+        }
         let index_json = Bytes::from(serde_json::to_vec(&index_document(&concepts, &meta))?);
         Ok(HarmonizedConcepts {
             concepts,
             words,
+            closure_words,
             by_key,
+            by_ancestor,
             index_json,
         })
     }
@@ -211,37 +238,57 @@ impl HarmonizedConcepts {
     }
 
     /// The middleware's concept search: a CURIE is an exact lookup; otherwise every query word
-    /// must match some word of the concept (see `word_matches`). Most studies first.
-    pub fn search(&self, query: &str, limit: usize) -> ConceptMatches<'_> {
-        let query = query.trim();
-        if is_curie(query) {
-            let items: Vec<_> = self.get(query).into_iter().collect();
-            return ConceptMatches {
-                total: items.len(),
-                items,
-            };
-        }
-        let wanted = words(query);
-        if wanted.is_empty() {
-            return ConceptMatches {
-                total: 0,
-                items: Vec::new(),
-            };
-        }
-        let matching: Vec<&Concept> = self
-            .concepts
-            .iter()
-            .zip(&self.words)
-            .filter(|(_, have)| {
-                wanted
-                    .iter()
-                    .all(|q| have.iter().any(|w| word_matches(q, w)))
-            })
-            .map(|(c, _)| c)
-            .collect();
+    /// must match some word of the concept (see `word_matches`), most studies first. After
+    /// those come concepts that match only once their closure labels count too: "cardiovascular"
+    /// finds hypertension through its superclass "cardiovascular disorder". With a `term`, only
+    /// concepts under it (the term is in their closure); without a query, all of those.
+    pub fn search(
+        &self,
+        query: Option<&str>,
+        term: Option<&str>,
+        limit: usize,
+    ) -> ConceptMatches<'_> {
+        let under: Option<HashSet<usize>> = term.map(|t| {
+            let key = concept_key(t.trim());
+            self.by_ancestor
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect()
+        });
+        let in_scope = |i: &usize| under.as_ref().is_none_or(|u| u.contains(i));
+        let matching: Vec<usize> = match query.map(str::trim) {
+            Some(q) if is_curie(q) => {
+                let found = self.by_key.get(&concept_key(q)).copied();
+                found.filter(in_scope).into_iter().collect()
+            }
+            Some(q) => {
+                let wanted = words(q);
+                // every query word matches a word in one of the sets
+                let all_match = |sets: &[&HashSet<String>]| {
+                    !wanted.is_empty()
+                        && wanted.iter().all(|q| {
+                            sets.iter()
+                                .flat_map(|s| s.iter())
+                                .any(|w| word_matches(q, w))
+                        })
+                };
+                let (direct, via_closure): (Vec<usize>, Vec<usize>) = (0..self.concepts.len())
+                    .filter(in_scope)
+                    .filter(|&i| all_match(&[&self.words[i], &self.closure_words[i]]))
+                    .partition(|&i| all_match(&[&self.words[i]]));
+                direct.into_iter().chain(via_closure).collect()
+            }
+            None => (0..self.concepts.len()).filter(in_scope).collect(),
+        };
         ConceptMatches {
             total: matching.len(),
-            items: matching.into_iter().take(limit).collect(),
+            items: matching
+                .into_iter()
+                .take(limit)
+                .map(|i| &self.concepts[i])
+                .collect(),
         }
     }
 
@@ -315,23 +362,47 @@ pub mod tests {
                 .collect(),
             kg_node_id: None,
             kg_category: None,
+            closure: vec![curie.into()],
+            closure_label: label.map(Into::into).into_iter().collect(),
         }
+    }
+
+    fn under(mut c: Concept, ancestors: &[(&str, &str)]) -> Concept {
+        c.closure
+            .extend(ancestors.iter().map(|(id, _)| id.to_string()));
+        c.closure.sort();
+        c.closure_label
+            .extend(ancestors.iter().map(|(_, label)| label.to_string()));
+        c.closure_label.sort();
+        c
     }
 
     pub fn sample() -> HarmonizedConcepts {
         HarmonizedConcepts::new(
             vec![
-                concept(
-                    "MONDO:0005149",
-                    Some("pulmonary hypertension"),
-                    &["FHS"],
-                    &["pulm_htn"],
+                under(
+                    concept(
+                        "MONDO:0005149",
+                        Some("pulmonary hypertension"),
+                        &["FHS"],
+                        &["pulm_htn"],
+                    ),
+                    &[
+                        ("MONDO:0005044", "hypertensive disorder"),
+                        ("MONDO:0000001", "disease"),
+                    ],
                 ),
-                concept(
-                    "MONDO:0005044",
-                    Some("hypertensive disorder"),
-                    &["ARIC", "JHS"],
-                    &["hyperten"],
+                under(
+                    concept(
+                        "MONDO:0005044",
+                        Some("hypertensive disorder"),
+                        &["ARIC", "JHS"],
+                        &["hyperten"],
+                    ),
+                    &[
+                        ("MONDO:0004995", "cardiovascular disorder"),
+                        ("MONDO:0000001", "disease"),
+                    ],
                 ),
                 concept("HP:0000822", None, &["FHS"], &["hypert_trt"]),
             ],
@@ -348,7 +419,7 @@ pub mod tests {
     fn orders_by_study_count_then_curie() {
         let concepts = sample();
         assert_eq!(
-            curies(&concepts.search("hypertension", 25)),
+            curies(&concepts.search(Some("hypertension"), None, 25)),
             ["MONDO:0005044", "HP:0000822", "MONDO:0005149"]
         );
     }
@@ -356,27 +427,67 @@ pub mod tests {
     #[test]
     fn total_counts_all_matches_not_the_page() {
         let concepts = sample();
-        let page = concepts.search("hypertension", 1);
+        let page = concepts.search(Some("hypertension"), None, 1);
         assert_eq!((page.total, page.items.len()), (3, 1));
     }
 
     #[test]
     fn short_prefixes_do_not_match() {
-        assert_eq!(sample().search("hyp", 25).total, 0);
-        assert_eq!(sample().search("hypert", 25).total, 3);
+        assert_eq!(sample().search(Some("hyp"), None, 25).total, 0);
+        assert_eq!(sample().search(Some("hypert"), None, 25).total, 3);
     }
 
     #[test]
     fn labels_are_searchable() {
-        assert_eq!(curies(&sample().search("pulmonary", 25)), ["MONDO:0005149"]);
+        assert_eq!(
+            curies(&sample().search(Some("pulmonary"), None, 25)),
+            ["MONDO:0005149"]
+        );
     }
 
     #[test]
     fn curies_look_up_case_insensitively_by_prefix() {
         let concepts = sample();
-        assert_eq!(concepts.search("mondo:0005044", 25).total, 1);
+        assert_eq!(concepts.search(Some("mondo:0005044"), None, 25).total, 1);
         assert_eq!(concepts.coverage("MONDO:0005044").unwrap().study_count, 2);
         assert!(concepts.coverage("MONDO:9999999").is_none());
+    }
+
+    #[test]
+    fn a_term_finds_every_concept_under_it_including_itself() {
+        let concepts = sample();
+        let under = |term, query| curies(&concepts.search(query, Some(term), 25));
+        assert_eq!(
+            under("MONDO:0005044", None),
+            ["MONDO:0005044", "MONDO:0005149"]
+        );
+        assert_eq!(
+            under("mondo:0000001", None),
+            ["MONDO:0005044", "MONDO:0005149"]
+        );
+        assert_eq!(under("MONDO:0005044", Some("pulmonary")), ["MONDO:0005149"]);
+        assert_eq!(
+            under("MONDO:0005044", Some("HP:0000822")),
+            Vec::<String>::new()
+        );
+        assert_eq!(under("MONDO:9999999", None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn closure_labels_match_after_the_concepts_own_words() {
+        let concepts = sample();
+        let found = |q| curies(&concepts.search(Some(q), None, 25));
+        assert_eq!(found("cardiovascular"), ["MONDO:0005044"]);
+        assert_eq!(
+            found("hypertensive"),
+            ["MONDO:0005044", "HP:0000822", "MONDO:0005149"],
+            "own label and file name (hypert_trt) first, then pulmonary hypertension through its superclass"
+        );
+        assert_eq!(
+            found("pulmonary hypertensive"),
+            ["MONDO:0005149"],
+            "words may come from the label and the closure together"
+        );
     }
 
     #[test]

@@ -15,3 +15,4 @@ dashboard/dist/
 
 # local
 .DS_Store
+.env

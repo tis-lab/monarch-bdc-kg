@@ -15,11 +15,12 @@ use tantivy::schema::{
     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, FAST, STORED, STRING,
 };
 use tantivy::{doc, TantivyDocument};
+use utoipa::ToSchema;
 
 use crate::analysis::{AUTOCOMPLETE, TEXT};
 
 /// One KG node, as sql/search_entity.sql exports it and as `/autocomplete` returns it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct Entity {
     pub id: String,
     pub category: Option<String>,
@@ -47,6 +48,7 @@ pub struct Entity {
     /// Monarch's node-level boosts, computed in sql/search_entity.sql. Read on export, kept in
     /// the index as a fast field, never returned.
     #[serde(default = "no_boost", skip_serializing)]
+    #[schema(ignore)]
     pub static_boost: f64,
 }
 

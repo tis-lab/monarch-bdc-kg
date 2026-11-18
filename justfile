@@ -168,7 +168,7 @@ search-index:
     cargo run --release --manifest-path search/Cargo.toml -- index \
         --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index.new
     # after indexing, which needs an empty directory
-    for f in concepts.jsonl concepts-meta.json; do
+    for f in concepts.jsonl concepts-meta.json words.jsonl; do
         if [ -f {{search_dir}}/$f ]; then cp {{search_dir}}/$f {{search_dir}}/index.new/; fi
     done
     rm -rf {{search_dir}}/index.old
