@@ -5,18 +5,19 @@
 //! search and coverage rules here match its `HarmonizedVariableLibrary`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::body::Bytes;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::parquet_table;
+
 /// File names inside the index directory, written by scripts/export_search.py.
-pub const CONCEPTS_FILE: &str = "concepts.jsonl";
-pub const META_FILE: &str = "concepts-meta.json";
+/// Written by scripts/export_search.py; its key/value metadata holds the HV `revision` and the
+/// `generated` date.
+pub const CONCEPTS_FILE: &str = "concept.parquet";
 
 /// The middleware ignores prefix matches shorter than this, so "hyp" doesn't match everything.
 const MIN_PREFIX_LENGTH: usize = 5;
@@ -83,8 +84,8 @@ pub struct Coverage {
     pub variable_names: Vec<String>,
 }
 
-/// The HV commit and date the concepts were built from (concepts-meta.json).
-#[derive(Debug, Default, Deserialize)]
+/// The HV commit and date the concepts were built from (concept.parquet's metadata).
+#[derive(Debug, Default)]
 struct Meta {
     revision: Option<String>,
     generated: Option<String>,
@@ -154,17 +155,15 @@ impl HarmonizedConcepts {
         if !path.exists() {
             return Ok(None);
         }
-        let mut concepts = Vec::new();
-        for (n, line) in BufReader::new(File::open(&path)?).lines().enumerate() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                let concept = serde_json::from_str(&line)
-                    .with_context(|| format!("{} line {}", path.display(), n + 1))?;
-                concepts.push(concept);
-            }
+        let table = parquet_table::read::<Concept>(&path)?;
+        let meta = Meta {
+            revision: table.metadata.get("revision").cloned(),
+            generated: table.metadata.get("generated").cloned(),
+        };
+        if meta.revision.is_none() {
+            tracing::warn!(path = %path.display(), "no HV revision in the concept metadata; harmonized-index.json will have none");
         }
-        let meta = read_meta(&dir.join(META_FILE));
-        Ok(Some(HarmonizedConcepts::new(concepts, meta)?))
+        Ok(Some(HarmonizedConcepts::new(table.rows, meta)?))
     }
 
     fn new(mut concepts: Vec<Concept>, meta: Meta) -> Result<HarmonizedConcepts> {
@@ -295,19 +294,6 @@ impl HarmonizedConcepts {
     /// The whole set in the middleware's harmonized-index format, as JSON bytes.
     pub fn index_json(&self) -> Bytes {
         self.index_json.clone()
-    }
-}
-
-fn read_meta(path: &Path) -> Meta {
-    let parsed = std::fs::read_to_string(path)
-        .map_err(anyhow::Error::from)
-        .and_then(|text| Ok(serde_json::from_str::<Meta>(&text)?));
-    match parsed {
-        Ok(meta) => meta,
-        Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "no concept metadata; harmonized-index.json will have no revision");
-            Meta::default()
-        }
     }
 }
 
@@ -488,6 +474,22 @@ pub mod tests {
             ["MONDO:0005149"],
             "words may come from the label and the closure together"
         );
+    }
+
+    #[test]
+    fn opens_the_exported_parquet_with_its_nested_fields_and_hv_revision() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+        let concepts = HarmonizedConcepts::open(&dir).unwrap().unwrap();
+        assert_eq!(concepts.len(), 2);
+        let c = concepts.get("MONDO:0005044").unwrap();
+        assert_eq!(c.source_mappings[0].concept_slot, "condition_concept");
+        assert_eq!(c.variables[0].studies, ["ARIC", "JHS"]);
+        assert_eq!(c.variables[0].variable_label, None);
+        assert_eq!(c.closure_label, ["disease", "hypertensive disorder"]);
+        assert_eq!(concepts.get("OMOP:1").unwrap().concept_label, None);
+        let doc: serde_json::Value = serde_json::from_slice(&concepts.index_json()).unwrap();
+        assert_eq!(doc["source"]["revision"], "3260ff3");
+        assert_eq!(doc["generated"], "2026-11-12");
     }
 
     #[test]

@@ -15,6 +15,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import duckdb
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -39,10 +41,19 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def concept_metadata(index_dir: Path) -> dict:
+    """The key/value metadata of the index's concept.parquet (revision, generated), if any."""
+    path = index_dir / "concept.parquet"
+    if not path.exists():
+        return {}
+    rows = duckdb.connect().execute(
+        f"SELECT decode(key), decode(value) FROM parquet_kv_metadata('{path}')").fetchall()
+    return dict(rows)
+
+
 def package(index_dir: Path, out_dir: Path, kg_release: str, kg_db: Path, info: dict) -> dict:
     """Write the manifest into the index, tar the index, and write the manifest beside the tar."""
-    meta_path = index_dir / "concepts-meta.json"
-    concepts_meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    concepts_meta = concept_metadata(index_dir)
     manifest = {
         "kg_release": kg_release,
         "kg_duckdb": {"file": kg_db.name, "bytes": kg_db.stat().st_size if kg_db.exists() else None},

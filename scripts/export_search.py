@@ -1,12 +1,19 @@
 """Export the search documents bdc-search indexes, from the KG duckdb.
 
 Writes, into OUT_DIR:
-  entities.jsonl       one document per KG node (sql/search_entity.sql)
-  concepts.jsonl       one harmonized concept per CURIE (sql/search_concept.sql), when the
-                       duckdb has the varlib schema (`just varlib`)
-  concepts-meta.json   the HV commit and date the concepts were built from
-  words.jsonl          the /bdc/words vocabulary (sql/search_words.sql): KG label words, plus
-                       variable library words when the duckdb has its lexicon
+  entities.jsonl         one document per KG node (sql/search_entity.sql): the indexer's input,
+                         not shipped with the index
+  concept.parquet        one harmonized concept per CURIE (sql/search_concept.sql), when the
+                         duckdb has the varlib schema (`just varlib`). The HV commit and date the
+                         concepts were built from are in the file's key/value metadata
+                         (revision, generated)
+  term_closure.parquet   one (ancestor, descendant) row per concept closure entry
+                         (sql/search_term_closure.sql), for the cohort builder's catalog
+  word.parquet           the /bdc/words vocabulary (sql/search_words.sql): KG label words, plus
+                         variable library words when the duckdb has its lexicon
+
+The Parquet files ship in the index directory; bdc-search reads concept.parquet and
+word.parquet at startup.
 
 Both SQL files read `search_nodes`, a view this script defines over `nodes` with every label
 column (name, synonyms, description, ...) of restricted sources blanked. The sources are a
@@ -16,7 +23,6 @@ export and leaked by the other.
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import duckdb
@@ -69,10 +75,22 @@ def define_search_nodes(con: duckdb.DuckDBPyConnection, restricted: list[str]):
     )
 
 
-def export_json(con: duckdb.DuckDBPyConnection, sql_file: Path, out: Path):
-    con.execute(f"COPY ({sql_file.read_text()}) TO '{out}' (FORMAT json)")
-    rows = con.execute(f"SELECT count(*) FROM read_json('{out}', format='newline_delimited')").fetchone()[0]
-    print(f"  {out.name}: {rows} rows")
+def export(con: duckdb.DuckDBPyConnection, sql_file: Path, out: Path, metadata: dict | None = None):
+    """Write `sql_file`'s rows to `out`: Parquet for a .parquet name (with `metadata` as the
+    file's key/value metadata), else JSON lines."""
+    if out.suffix == ".parquet":
+        pairs = ", ".join(f"{key}: {quote(value)}" for key, value in (metadata or {}).items() if value is not None)
+        options = "FORMAT parquet, COMPRESSION snappy" + (f", KV_METADATA {{{pairs}}}" if pairs else "")
+        count = f"SELECT count(*) FROM read_parquet('{out}')"
+    else:
+        options = "FORMAT json"
+        count = f"SELECT count(*) FROM read_json('{out}', format='newline_delimited')"
+    con.execute(f"COPY ({sql_file.read_text()}) TO '{out}' ({options})")
+    print(f"  {out.name}: {con.execute(count).fetchone()[0]} rows")
+
+
+def quote(value) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 # The varlib tables the concept export reads; a partial load (interrupted, or older) is skipped.
@@ -119,6 +137,14 @@ def concepts_meta(con: duckdb.DuckDBPyConnection) -> dict:
     return {"revision": row[0], "generated": row[1]} if row else {"revision": None, "generated": None}
 
 
+def export_concepts(con: duckdb.DuckDBPyConnection, out_dir: Path):
+    """concept.parquet, then term_closure.parquet from the concepts just written."""
+    concepts = out_dir / "concept.parquet"
+    export(con, ROOT / "sql" / "search_concept.sql", concepts, concepts_meta(con))
+    con.execute(f"CREATE OR REPLACE TEMP VIEW search_concept AS SELECT * FROM read_parquet('{concepts}')")
+    export(con, ROOT / "sql" / "search_term_closure.sql", out_dir / "term_closure.parquet")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("db", type=Path)
@@ -131,15 +157,14 @@ def main():
     con = duckdb.connect(str(args.db), read_only=True)
     define_search_nodes(con, restricted_sources(args.config))
 
-    export_json(con, ROOT / "sql" / "search_entity.sql", args.out_dir / "entities.jsonl")
+    export(con, ROOT / "sql" / "search_entity.sql", args.out_dir / "entities.jsonl")
     varlib = has_varlib(con)
     define_bdc_word(con, varlib)
-    export_json(con, ROOT / "sql" / "search_words.sql", args.out_dir / "words.jsonl")
+    export(con, ROOT / "sql" / "search_words.sql", args.out_dir / "word.parquet")
     if varlib:
-        export_json(con, ROOT / "sql" / "search_concept.sql", args.out_dir / "concepts.jsonl")
-        (args.out_dir / "concepts-meta.json").write_text(json.dumps(concepts_meta(con)))
+        export_concepts(con, args.out_dir)
     else:
-        for stale in ("concepts.jsonl", "concepts-meta.json"):
+        for stale in ("concept.parquet", "term_closure.parquet"):
             (args.out_dir / stale).unlink(missing_ok=True)
         print(f"  {args.db} has no complete varlib schema; skipping harmonized concepts (just varlib)")
 

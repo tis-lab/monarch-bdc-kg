@@ -74,14 +74,25 @@ coverage:
 export:
     uv run koza export {{db}} -o output -f tsv
 
-# Publish output/ to the bucket: kg/{today}/ and kg/latest/
-upload:
+# Publish output/ to the bucket: kg/{release}/ and kg/latest/
+upload release=`date +%Y-%m-%d`:
+    gcloud storage rsync -r output {{bucket}}/kg/{{release}}
+    gcloud storage rsync -r output {{bucket}}/kg/latest
+    @echo "released {{bucket}}/kg/{{release}} (+ latest)"
+
+# Publish only the search artifact (output/search/) into an existing release, e.g. after
+# rebuilding it with `just search-release release=...`; kg/latest/ too if it is the newest
+upload-search release:
     #!/usr/bin/env bash
     set -euo pipefail
-    release=$(date +%Y-%m-%d)
-    gcloud storage rsync -r output {{bucket}}/kg/$release
-    gcloud storage rsync -r output {{bucket}}/kg/latest
-    echo "released {{bucket}}/kg/$release (+ latest)"
+    gcloud storage rsync -r output/search {{bucket}}/kg/{{release}}/search
+    newest=$(gcloud storage ls {{bucket}}/kg/ | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort | tail -1)
+    if [ "{{release}}" = "$newest" ]; then
+        gcloud storage rsync -r output/search {{bucket}}/kg/latest/search
+        echo "published {{bucket}}/kg/{{release}}/search (+ latest)"
+    else
+        echo "published {{bucket}}/kg/{{release}}/search (latest is $newest; left alone)"
+    fi
 
 all: download conform layer verify coverage search-release
 
@@ -168,7 +179,7 @@ search-index:
     cargo run --release --manifest-path search/Cargo.toml -- index \
         --input {{search_dir}}/entities.jsonl --index-dir {{search_dir}}/index.new
     # after indexing, which needs an empty directory
-    for f in concepts.jsonl concepts-meta.json words.jsonl; do
+    for f in concept.parquet term_closure.parquet word.parquet; do
         if [ -f {{search_dir}}/$f ]; then cp {{search_dir}}/$f {{search_dir}}/index.new/; fi
     done
     rm -rf {{search_dir}}/index.old

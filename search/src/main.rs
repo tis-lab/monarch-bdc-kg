@@ -4,8 +4,8 @@
 //!   bdc-search serve --index-dir index/
 //!   bdc-search query --index-dir index/ hypertension
 //!
-//! Harmonized concepts (`concepts.jsonl`, written by scripts/export_search.py) are served from
-//! the same index directory when present.
+//! Harmonized concepts and the word vocabulary (`concept.parquet`, `word.parquet`, written by
+//! scripts/export_search.py) are served from the same index directory when present.
 //!
 //! Where things are:
 //!   monarch.rs       Monarch's ranking and paging rules
@@ -13,6 +13,8 @@
 //!   analysis.rs      how text is split into searchable terms
 //!   entity_index.rs  building the KG entity index and searching it
 //!   concepts.rs      harmonized concepts, in the middleware's format
+//!   words.rs         word completion
+//!   parquet_table.rs reading the index directory's Parquet tables
 //!   http.rs          routes, parameters and error responses
 //!   readonly.rs      serving an index from a read-only filesystem
 
@@ -23,6 +25,7 @@ mod entity_index;
 mod http;
 mod monarch;
 mod openapi;
+mod parquet_table;
 mod readonly;
 mod schema;
 mod words;
