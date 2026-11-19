@@ -5,6 +5,8 @@ import json
 import tarfile
 from pathlib import Path
 
+import duckdb
+
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("package_search", ROOT / "scripts" / "package_search.py")
 package_search = importlib.util.module_from_spec(spec)
@@ -18,7 +20,8 @@ def test_a_release_packages_the_index_with_its_manifest(tmp_path):
     index = tmp_path / "index"
     index.mkdir()
     (index / "meta.json").write_text("{}")
-    (index / "concepts-meta.json").write_text(json.dumps({"revision": "3260ff3", "generated": "2026-11-12"}))
+    duckdb.connect().execute(f"""COPY (SELECT 'MONDO:1' AS "conceptType") TO '{index / "concept.parquet"}'
+                                 (FORMAT parquet, KV_METADATA {{revision: '3260ff3', generated: '2026-11-12'}})""")
     kg = tmp_path / "bdc-kg.duckdb"
     kg.write_bytes(b"duckdb")
 
@@ -34,7 +37,7 @@ def test_a_release_packages_the_index_with_its_manifest(tmp_path):
     with tarfile.open(tmp_path / "out" / "index.tar.gz") as tar:
         names = set(tar.getnames())
         inside = json.load(tar.extractfile("index/manifest.json"))
-    assert {"index/meta.json", "index/concepts-meta.json", "index/manifest.json"} <= names
+    assert {"index/meta.json", "index/concept.parquet", "index/manifest.json"} <= names
     assert inside["index"]["index_version"] == "abc123", "the server's /version reads this copy"
     assert "artifact" not in inside, "a tarball can't contain its own checksum"
     assert json.loads((tmp_path / "out" / "manifest.json").read_text()) == published

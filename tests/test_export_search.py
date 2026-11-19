@@ -56,12 +56,20 @@ def concept(con, id, code, bdchm_class, *sources):
         con.execute("INSERT INTO varlib.concept_source VALUES (?, ?, ?)", [id, cohort, source_file])
 
 
+def read(path):
+    """A written export's rows as dicts: JSON lines, or Parquet (nested lists and structs kept)."""
+    if path.suffix == ".parquet":
+        result = duckdb.connect().execute(f"SELECT * FROM read_parquet('{path}')")
+        columns = [d[0] for d in result.description]
+        return [dict(zip(columns, row)) for row in result.fetchall()]
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
 def export(con, tmp_path, sql_file):
     export_search.define_search_nodes(con, [RESTRICTED])
-    out = tmp_path / f"{sql_file}.jsonl"
-    export_search.export_json(con, ROOT / "sql" / f"{sql_file}.sql", out)
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
-    return {row.get("id") or row["conceptType"]: row for row in rows}
+    out = tmp_path / (f"{sql_file}.jsonl" if sql_file == "search_entity" else f"{sql_file}.parquet")
+    export_search.export(con, ROOT / "sql" / f"{sql_file}.sql", out)
+    return {row.get("id") or row["conceptType"]: row for row in read(out)}
 
 
 @pytest.fixture
@@ -158,6 +166,24 @@ def test_closure_labels_come_from_the_kg_and_respect_restricted_sources(con, tmp
     assert row["closureLabel"] == ["cardiovascular disorder", "hypertensive disorder"]
 
 
+def test_concepts_carry_their_hv_commit_and_a_term_closure_table(con, tmp_path):
+    node(con, "MONDO:1", "biolink:Disease", "disease")
+    con.execute(VARLIB)
+    concept(con, "bdcvl:b", "MONDO:2", "Condition", ("JHS", "JHS-ingest/b.yaml"))
+    con.execute("INSERT INTO varlib.concept_anchor VALUES ('bdcvl:b', 'MONDO:2')")
+    con.execute("INSERT INTO closure VALUES ('MONDO:2', 'rdfs:subClassOf', 'MONDO:1')")
+    con.execute("""INSERT INTO varlib.load_manifest (input, repo, commit, loaded_at)
+                   VALUES ('source_repo', 'NHLBI-BDC-DMC-HV', '3260ff3', '2026-11-12 10:00')""")
+    export_search.define_search_nodes(con, [])
+    export_search.export_concepts(con, tmp_path)
+
+    metadata = dict(duckdb.connect().execute(
+        f"SELECT decode(key), decode(value) FROM parquet_kv_metadata('{tmp_path / 'concept.parquet'}')").fetchall())
+    assert metadata == {"revision": "3260ff3", "generated": "2026-11-12"}
+    pairs = [(r["ancestor"], r["descendant"]) for r in read(tmp_path / "term_closure.parquet")]
+    assert pairs == [("MONDO:1", "MONDO:2"), ("MONDO:2", "MONDO:2")], "each concept is its own descendant"
+
+
 def test_a_partial_varlib_schema_is_skipped(con):
     con.execute("CREATE SCHEMA varlib; CREATE TABLE varlib.concept (id VARCHAR)")
     assert not export_search.has_varlib(con)
@@ -171,15 +197,15 @@ def test_the_controlled_access_deployment_blanks_nothing(con, tmp_path):
     node(con, "SNOMEDCT:1", "biolink:Procedure", "licensed label", provided_by=RESTRICTED)
     export_search.define_search_nodes(con, export_search.restricted_sources(ROOT / "search.yaml"))
     out = tmp_path / "entities.jsonl"
-    export_search.export_json(con, ROOT / "sql" / "search_entity.sql", out)
+    export_search.export(con, ROOT / "sql" / "search_entity.sql", out)
     assert json.loads(out.read_text())["name"] == "licensed label"
 
 
 def words(con, tmp_path):
     export_search.define_bdc_word(con, export_search.has_varlib(con))
-    out = tmp_path / "words.jsonl"
-    export_search.export_json(con, ROOT / "sql" / "search_words.sql", out)
-    return {row["word"]: row for row in map(json.loads, out.read_text().splitlines())}
+    out = tmp_path / "word.parquet"
+    export_search.export(con, ROOT / "sql" / "search_words.sql", out)
+    return {row["word"]: row for row in read(out)}
 
 
 LEXICON = """

@@ -118,6 +118,19 @@ just search-serve   # http://localhost:8080/v3/api/autocomplete?q=pulmonary%20hy
 just search-image   # linux/amd64 image; run with the index mounted at /index
 ```
 
+The release artifact (`just search-release`, published as `kg/{release}/search/index.tar.gz`
+with a `manifest.json`) is one `index/` directory, which is everything the server reads:
+
+| file | contents |
+|---|---|
+| tantivy segments, `meta.json`, `bdc-search-index.json` | the KG entity index (`sql/search_entity.sql`) |
+| `concept.parquet` | harmonized concepts (`sql/search_concept.sql`); its key/value metadata holds the HV `revision` and `generated` date |
+| `term_closure.parquet` | one (ancestor, descendant) row per concept closure entry, for the cohort builder's `catalog.term_closure` |
+| `word.parquet` | the `/bdc/words` vocabulary (`sql/search_words.sql`) |
+| `manifest.json` | the KG release, HV revision, bdc-search commit and counts, as `/version` reports them |
+
+The Parquet tables can be queried directly, e.g. `duckdb -c "SELECT * FROM 'index/concept.parquet'"`.
+
 The query mirrors monarch-app's autocomplete: Monarch's query fields and boosts, every
 word required, and Monarch's category, deprecation and exact-synonym multipliers. Analyzers
 follow monarch-ingest's Solr field types. The API is served with controlled access (the data

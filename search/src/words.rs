@@ -1,5 +1,5 @@
 //! Word completion (`/bdc/words`): finishes the word being typed, from the vocabulary of KG
-//! labels and BDC variable and concept text (`words.jsonl`, written from sql/search_words.sql).
+//! labels and BDC variable and concept text (`word.parquet`, written from sql/search_words.sql).
 //!
 //! The words are held in an FST (the `fst` crate), a compact sorted set that finds every word
 //! starting with a prefix without scanning the rest. With `fuzzy`, it also finds words whose
@@ -9,17 +9,17 @@
 //! by how many KG nodes do. Someone typing "hyp" in the portal wants "hypertension" before
 //! "hypoplasia".
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use fst::automaton::{Automaton, Levenshtein, Str};
 use fst::{IntoStreamer, Map, MapBuilder, Streamer};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-pub const WORDS_FILE: &str = "words.jsonl";
+use crate::parquet_table;
+
+pub const WORDS_FILE: &str = "word.parquet";
 pub const DEFAULT_LIMIT: usize = 10;
 pub const MAX_LIMIT: usize = 100;
 
@@ -79,16 +79,7 @@ impl Words {
         if !path.exists() {
             return Ok(None);
         }
-        let mut words = Vec::new();
-        for (n, line) in BufReader::new(File::open(&path)?).lines().enumerate() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                let word = serde_json::from_str(&line)
-                    .with_context(|| format!("{} line {}", path.display(), n + 1))?;
-                words.push(word);
-            }
-        }
-        Ok(Some(Words::new(words)?))
+        Ok(Some(Words::new(parquet_table::read::<Word>(&path)?.rows)?))
     }
 
     pub fn new(mut words: Vec<Word>) -> Result<Words> {
@@ -186,6 +177,16 @@ pub(crate) mod tests {
 
     fn plain(words: &[&str]) -> Vec<(String, bool)> {
         words.iter().map(|w| (w.to_string(), false)).collect()
+    }
+
+    #[test]
+    fn opens_the_exported_parquet() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+        let words = Words::open(&dir).unwrap().unwrap();
+        assert_eq!(words.len(), 2);
+        let found = words.complete("hyp", 10, false).unwrap();
+        assert_eq!(found.items[0].word.word, "hypertension");
+        assert_eq!(found.items[0].word.variables, 33);
     }
 
     #[test]
